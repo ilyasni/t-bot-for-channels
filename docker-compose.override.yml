@@ -1,0 +1,76 @@
+services:
+  telethon:
+    env_file:
+      - ./telethon/.env
+    build:
+      context: ./telethon
+      dockerfile: Dockerfile.telethon
+    container_name: telethon
+
+    ports:
+      - "8010:8010"
+    volumes:
+      # Монтируем сессии Telegram для сохранения аутентификации
+      - ./telethon/sessions:/app/sessions
+      # Монтируем базу данных для сохранения данных
+      - ./telethon/data:/app/data
+      # Монтируем логи
+      - ./telethon/logs:/app/logs
+      # Монтируем .env файл
+      - ./telethon/.env:/app/.env
+    environment:
+      - API_ID=${API_ID}
+      - API_HASH=${API_HASH}
+      - PHONE=${PHONE}
+      - AUTH_CODE=${AUTH_CODE}
+      # Переменные окружения (будут переопределены из .env файла)
+      - HOST=0.0.0.0
+      - PORT=8010
+      - PARSER_INTERVAL_MINUTES=30
+      # База данных - по умолчанию SQLite, можно переопределить на PostgreSQL
+      - DATABASE_URL=${TELEGRAM_DATABASE_URL:-sqlite:///./data/telethon_bot.db}
+    restart: unless-stopped
+    networks:
+      - localai_default
+
+  telethon-bot:
+    env_file:
+      - ./telethon/.env
+    build:
+      context: ./telethon
+      dockerfile: Dockerfile.telethon
+    container_name: telethon-bot
+    command: ["python", "bot_standalone.py"]
+    volumes:
+      # Монтируем сессии Telegram для сохранения аутентификации
+      - ./telethon/sessions:/app/sessions
+      # Монтируем базу данных для сохранения данных
+      - ./telethon/data:/app/data
+      # Монтируем логи
+      - ./telethon/logs:/app/logs
+      # Монтируем .env файл
+      - ./telethon/.env:/app/.env
+    environment:
+      - API_ID=${API_ID}
+      - API_HASH=${API_HASH}
+      - PHONE=${PHONE}
+      - AUTH_CODE=${AUTH_CODE}
+      - BOT_TOKEN=${BOT_TOKEN}
+      # База данных - по умолчанию SQLite, можно переопределить на PostgreSQL
+      - DATABASE_URL=${TELEGRAM_DATABASE_URL:-sqlite:///./data/telethon_bot.db}
+    restart: unless-stopped
+    networks:
+      - localai_default
+
+  gpt2giga-proxy:
+    build:
+      context: ./gpt2giga
+      dockerfile: Dockerfile.gpt2giga
+    container_name: gpt2giga-proxy
+    ports:
+      - "8090:8090"
+    restart: unless-stopped
+
+networks:
+  localai_default:
+    external: true
