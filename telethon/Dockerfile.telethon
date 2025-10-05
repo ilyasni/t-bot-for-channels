@@ -1,0 +1,37 @@
+FROM python:3.9-slim
+
+# Установка системных зависимостей
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
+
+# Создание рабочей директории
+WORKDIR /app
+
+# Копирование файлов зависимостей
+COPY requirements.txt .
+
+# Установка Python зависимостей
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Копирование исходного кода
+COPY . .
+
+# Создание необходимых директорий
+RUN mkdir -p sessions logs
+
+# Установка прав на выполнение скриптов
+RUN chmod +x setup.py
+
+# Переменные окружения по умолчанию
+ENV HOST=0.0.0.0
+ENV PORT=8010
+ENV PARSER_INTERVAL_MINUTES=30
+ENV DATABASE_URL=sqlite:///./telethon_bot.db
+
+# Открытие порта
+EXPOSE 8010
+
+# Команда по умолчанию - запуск всей системы
+CMD ["python", "run_system.py"]
