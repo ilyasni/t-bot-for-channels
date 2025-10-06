@@ -9,6 +9,7 @@ services:
 
     ports:
       - "8010:8010"
+      - "8001:8001"
     volumes:
       # Монтируем сессии Telegram для сохранения аутентификации
       - ./telethon/sessions:/app/sessions
@@ -29,6 +30,8 @@ services:
       - PARSER_INTERVAL_MINUTES=30
       # База данных - по умолчанию SQLite, можно переопределить на PostgreSQL
       - DATABASE_URL=${TELEGRAM_DATABASE_URL:-sqlite:///./data/telethon_bot.db}
+      # Часовой пояс
+      - TZ=Europe/Moscow
     restart: unless-stopped
     networks:
       - localai_default

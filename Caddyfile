@@ -35,6 +35,11 @@
     reverse_proxy kong:8000
 }
 
+# Telegram Auth Server
+{$TELEGRAM_AUTH_HOSTNAME:telegram-auth.produman.studio} {
+    reverse_proxy telethon:8001
+}
+
 # Grafana
 {$GRAFANA_HOSTNAME} {
     reverse_proxy grafana:3000

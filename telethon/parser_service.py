@@ -3,8 +3,8 @@ import schedule
 import time
 from datetime import datetime, timezone, timedelta
 from database import SessionLocal
-from models import Channel, Post
-from auth import get_client
+from models import Channel, Post, User
+from auth import get_authenticated_users, get_user_client, cleanup_inactive_clients
 from telethon.errors import FloodWaitError
 import logging
 
@@ -13,47 +13,72 @@ logger = logging.getLogger(__name__)
 
 class ParserService:
     def __init__(self):
-        self.client = None
         self.is_running = False
     
     async def initialize(self):
-        """Инициализация клиента Telegram"""
+        """Инициализация сервиса парсинга"""
         try:
-            # Используем улучшенную функцию get_client с настройками повторных попыток
-            self.client = await get_client(max_retries=3, base_delay=5)
-            
-            if self.client and self.client.is_connected():
-                logger.info("✅ ParserService: Успешное подключение к Telegram")
-                return True
-            else:
-                logger.error("❌ ParserService: Не удалось подключиться к Telegram")
-                return False
-                
+            logger.info("✅ ParserService: Сервис инициализирован для многопользовательского режима")
+            return True
         except Exception as e:
-            logger.error(f"❌ ParserService: Ошибка подключения к Telegram: {str(e)}")
+            logger.error(f"❌ ParserService: Ошибка инициализации: {str(e)}")
             return False
     
     async def parse_all_channels(self):
-        """Парсить все активные каналы"""
-        if not self.client or not self.client.is_connected():
-            logger.error("❌ ParserService: Telegram client не подключен")
-            return
-        
+        """Парсить все активные каналы для всех аутентифицированных пользователей"""
         db = SessionLocal()
         try:
-            # Получаем все активные каналы
-            channels = db.query(Channel).filter(Channel.is_active == True).all()
+            # Получаем всех аутентифицированных пользователей
+            authenticated_users = await get_authenticated_users(db)
             
-            if not channels:
-                logger.info("📭 ParserService: Нет активных каналов для парсинга")
+            if not authenticated_users:
+                logger.info("📭 ParserService: Нет аутентифицированных пользователей для парсинга")
                 return
             
-            logger.info(f"🔄 ParserService: Начинаем парсинг {len(channels)} каналов")
+            logger.info(f"🔄 ParserService: Начинаем парсинг для {len(authenticated_users)} пользователей")
+            
+            total_posts = 0
+            for user in authenticated_users:
+                try:
+                    user_posts = await self.parse_user_channels(user, db)
+                    total_posts += user_posts
+                    if user_posts > 0:
+                        logger.info(f"✅ ParserService: Пользователь {user.telegram_id} - добавлено {user_posts} постов")
+                except Exception as e:
+                    logger.error(f"❌ ParserService: Ошибка парсинга для пользователя {user.telegram_id}: {str(e)}")
+            
+            logger.info(f"✅ ParserService: Парсинг завершен. Всего добавлено {total_posts} постов")
+            
+        except Exception as e:
+            logger.error(f"❌ ParserService: Общая ошибка парсинга: {str(e)}")
+        finally:
+            db.close()
+    
+    async def parse_user_channels(self, user: User, db: SessionLocal) -> int:
+        """Парсить каналы конкретного пользователя"""
+        try:
+            # Получаем клиент пользователя
+            client = await get_user_client(user)
+            if not client:
+                logger.warning(f"⚠️ ParserService: Не удалось получить клиент для пользователя {user.telegram_id}")
+                return 0
+            
+            # Получаем каналы пользователя
+            channels = db.query(Channel).filter(
+                Channel.user_id == user.id,
+                Channel.is_active == True
+            ).all()
+            
+            if not channels:
+                logger.info(f"📭 ParserService: У пользователя {user.telegram_id} нет активных каналов")
+                return 0
+            
+            logger.info(f"🔄 ParserService: Парсинг {len(channels)} каналов для пользователя {user.telegram_id}")
             
             total_posts = 0
             for channel in channels:
                 try:
-                    posts_added = await self.parse_channel_posts(channel, db)
+                    posts_added = await self.parse_channel_posts(channel, client, db)
                     total_posts += posts_added
                     if posts_added > 0:
                         logger.info(f"✅ ParserService: @{channel.channel_username} - добавлено {posts_added} постов")
@@ -63,22 +88,21 @@ class ParserService:
                 except Exception as e:
                     logger.error(f"❌ ParserService: Ошибка парсинга @{channel.channel_username}: {str(e)}")
             
-            logger.info(f"✅ ParserService: Парсинг завершен. Всего добавлено {total_posts} постов")
+            return total_posts
             
         except Exception as e:
-            logger.error(f"❌ ParserService: Общая ошибка парсинга: {str(e)}")
-        finally:
-            db.close()
+            logger.error(f"❌ ParserService: Ошибка парсинга каналов пользователя {user.telegram_id}: {str(e)}")
+            return 0
     
-    async def parse_channel_posts(self, channel: Channel, db):
-        """Парсить посты для конкретного канала"""
+    async def parse_channel_posts(self, channel: Channel, client, db):
+        """Парсить посты для конкретного канала с использованием персонального клиента"""
         try:
             # Получаем последний парсинг
             last_parsed = channel.last_parsed_at or datetime.now(timezone.utc) - timedelta(hours=24)
             
             # Получаем новые сообщения
             posts_added = 0
-            async for message in self.client.iter_messages(
+            async for message in client.iter_messages(
                 f"@{channel.channel_username}",
                 limit=50,  # Ограничиваем количество для производительности
                 offset_date=datetime.now(timezone.utc),
@@ -125,6 +149,31 @@ class ParserService:
             db.rollback()
             raise e
     
+    async def parse_user_channels_by_id(self, user_id: int) -> dict:
+        """Парсить каналы конкретного пользователя по ID"""
+        db = SessionLocal()
+        try:
+            user = db.query(User).filter(User.id == user_id).first()
+            if not user:
+                return {"error": "Пользователь не найден"}
+            
+            if not user.is_authenticated:
+                return {"error": "Пользователь не аутентифицирован"}
+            
+            posts_added = await self.parse_user_channels(user, db)
+            return {
+                "user_id": user.id,
+                "telegram_id": user.telegram_id,
+                "posts_added": posts_added,
+                "status": "success"
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ ParserService: Ошибка парсинга пользователя {user_id}: {str(e)}")
+            return {"error": str(e)}
+        finally:
+            db.close()
+    
     def schedule_parsing(self, interval_minutes=30):
         """Настройка расписания парсинга"""
         schedule.every(interval_minutes).minutes.do(self.run_parsing)
@@ -146,6 +195,9 @@ class ParserService:
         
         while self.is_running:
             schedule.run_pending()
+            # Очищаем неактивные клиенты каждые 10 минут
+            if int(time.time()) % 600 == 0:
+                await cleanup_inactive_clients()
             await asyncio.sleep(60)  # Проверяем каждую минуту
     
     def stop(self):
