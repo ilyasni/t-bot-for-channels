@@ -12,3 +12,40 @@ volumes/
 telethon/sessions/
 telethon/data/
 telethon/logs/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.env.local
+.envrc
+.pytype/
+.pyre/
+
+# Testing & tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# IDE / Editors
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+
+# Docker / Compose
+docker-compose.override.local.yml
+
+# Logs
+*.log
+logs/
+log/
+
+# Node (возможные под-проекты)
+node_modules/
