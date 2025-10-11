@@ -10,6 +10,7 @@ searxng/uwsgi*
 shared-backup/
 shared/
 supabase/
+gpt2giga/
 volumes/
 telethon/sessions/
 telethon/data/
