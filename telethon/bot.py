@@ -5,10 +5,13 @@ from database import get_db, SessionLocal
 from models import User, Channel, Post
 from auth import create_auth_session, get_auth_url, check_user_auth_status, logout_user
 from datetime import datetime, timedelta
+from typing import List, Dict, Optional
 import re
 import os
 import time
 import logging
+import httpx
+import asyncio
 from dotenv import load_dotenv
 
 logging.basicConfig(level=logging.INFO)
@@ -90,8 +93,57 @@ class TelegramBot:
         finally:
             db.close()
     
+    async def _call_rag_service(self, endpoint: str, method: str = "POST", **kwargs) -> Optional[Dict]:
+        """
+        Универсальный метод для вызова RAG service
+        
+        Args:
+            endpoint: Endpoint RAG service (например, "/rag/query")
+            method: HTTP метод (GET или POST)
+            **kwargs: Параметры запроса (для POST - json, для GET - params)
+            
+        Returns:
+            Dict с ответом или None в случае ошибки
+        """
+        rag_url = os.getenv("RAG_SERVICE_URL", "http://rag-service:8020")
+        rag_enabled = os.getenv("RAG_SERVICE_ENABLED", "true").lower() == "true"
+        
+        if not rag_enabled:
+            logger.warning("RAG service отключен в конфигурации")
+            return None
+        
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                if method.upper() == "GET":
+                    response = await client.get(
+                        f"{rag_url}{endpoint}",
+                        params=kwargs
+                    )
+                else:  # POST
+                    response = await client.post(
+                        f"{rag_url}{endpoint}",
+                        json=kwargs
+                    )
+                
+                if response.status_code == 200:
+                    return response.json()
+                else:
+                    logger.error(f"RAG service error {response.status_code}: {response.text[:200]}")
+                    return None
+                    
+        except httpx.TimeoutException:
+            logger.error(f"RAG service timeout: {endpoint}")
+            return None
+        except httpx.ConnectError:
+            logger.error(f"RAG service недоступен: {endpoint}")
+            return None
+        except Exception as e:
+            logger.error(f"RAG service error: {e}")
+            return None
+    
     def setup_handlers(self):
         """Настройка обработчиков команд"""
+        # Основные команды
         self.application.add_handler(CommandHandler("start", self.start_command))
         self.application.add_handler(CommandHandler("auth", self.auth_command))
         self.application.add_handler(CommandHandler("auth_status", self.auth_status_command))
@@ -102,6 +154,14 @@ class TelegramBot:
         self.application.add_handler(CommandHandler("my_channels", self.my_channels_command))
         self.application.add_handler(CommandHandler("remove_channel", self.remove_channel_command))
         self.application.add_handler(CommandHandler("help", self.help_command))
+        
+        # RAG команды
+        self.application.add_handler(CommandHandler("ask", self.ask_command))
+        self.application.add_handler(CommandHandler("search", self.search_command))
+        self.application.add_handler(CommandHandler("recommend", self.recommend_command))
+        self.application.add_handler(CommandHandler("digest", self.digest_command))
+        
+        # Callback и текстовые сообщения
         self.application.add_handler(CallbackQueryHandler(self.button_callback))
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text))
     
@@ -129,7 +189,7 @@ class TelegramBot:
                 welcome_text = f"""
 🤖 Добро пожаловать в Telegram Channel Parser Bot!
 
-Я помогу вам отслеживать посты из ваших любимых каналов.
+Я помогу вам отслеживать посты из ваших любимых каналов и искать информацию с помощью AI.
 
 🔐 Для начала работы необходимо пройти аутентификацию:
 /auth - Начать процесс аутентификации
@@ -137,8 +197,14 @@ class TelegramBot:
 📋 После аутентификации будут доступны команды:
 /add_channel - Добавить канал для отслеживания
 /my_channels - Показать ваши каналы
-/remove_channel - Удалить канал
-/help - Показать справку
+
+🤖 RAG & AI команды:
+/ask - Поиск ответа в постах
+/search - Гибридный поиск (посты + веб)
+/recommend - Персональные рекомендации
+/digest - AI-дайджесты
+
+/help - Показать полную справку
                 """
             else:
                 if db_user.is_authenticated:
@@ -147,13 +213,17 @@ class TelegramBot:
 
 ✅ Вы аутентифицированы и можете использовать все функции.
 
-📋 Ваши команды:
-/add_channel - Добавить канал для отслеживания
-/my_channels - Показать ваши каналы
-/remove_channel - Удалить канал
-/auth_status - Проверить статус аутентификации
-/logout - Выйти из системы
-/help - Показать справку
+📋 **Управление каналами:**
+/add_channel - Добавить канал
+/my_channels - Ваши каналы
+
+🤖 **RAG & AI:**
+/ask <вопрос> - Поиск ответа в постах
+/search <запрос> - Гибридный поиск
+/recommend - Персональные рекомендации
+/digest - AI-дайджесты
+
+/help - Полная справка
                     """
                 else:
                     welcome_text = f"""
@@ -491,6 +561,10 @@ class TelegramBot:
         if query.data.startswith("remove_"):
             channel_id = int(query.data.split("_")[1])
             await self.remove_channel_by_id(query, channel_id)
+        elif query.data.startswith("digest_"):
+            await self.handle_digest_callback(query, context)
+        elif query.data.startswith("search_"):
+            await self.handle_search_callback(query, context)
     
     async def remove_channel_by_id(self, query, channel_id: int):
         """Удаление канала (отписка пользователя от канала)"""
@@ -546,6 +620,62 @@ class TelegramBot:
         # Очищаем устаревшие состояния
         self._cleanup_expired_states()
         
+        # Проверяем, есть ли активное состояние для пользователя
+        if user.id in self.user_states:
+            state = self.user_states[user.id]
+            
+            # Обработка ввода тем для дайджеста
+            if state.get('action') == 'digest_topics_input':
+                # Парсим темы
+                topics = [topic.strip() for topic in text.split(',') if topic.strip()]
+                
+                if not topics:
+                    await update.message.reply_text("❌ Темы не распознаны. Попробуйте еще раз.")
+                    return
+                
+                db = SessionLocal()
+                try:
+                    db_user = db.query(User).filter(User.telegram_id == user.id).first()
+                    if not db_user:
+                        await update.message.reply_text("❌ Пользователь не найден")
+                        return
+                    
+                    # Получаем текущие настройки
+                    result = await self._call_rag_service(
+                        f"/rag/digest/settings/{db_user.id}",
+                        method="GET"
+                    )
+                    
+                    if result:
+                        settings = result.get("settings", {})
+                        
+                        # Обновляем с новыми темами
+                        update_result = await self._call_rag_service(
+                            f"/rag/digest/settings/{db_user.id}",
+                            enabled=settings.get("enabled", True),
+                            frequency=settings.get("frequency", "daily"),
+                            time=settings.get("time", "09:00"),
+                            ai_summarize=settings.get("ai_summarize", False),
+                            summary_style=settings.get("summary_style", "concise"),
+                            preferred_topics=topics
+                        )
+                        
+                        if update_result:
+                            await update.message.reply_text(
+                                f"✅ Темы сохранены: {', '.join(topics)}\n\n"
+                                "Используйте /digest для просмотра всех настроек."
+                            )
+                        else:
+                            await update.message.reply_text("❌ Ошибка сохранения тем")
+                    
+                    # Очищаем состояние
+                    del self.user_states[user.id]
+                    
+                finally:
+                    db.close()
+                
+                return
+        
         # Если пользователь пытается ввести код аутентификации в чат
         if text.isdigit() and len(text) == 5:
             await update.message.reply_text(
@@ -572,56 +702,781 @@ class TelegramBot:
                 "/auth - Безопасная аутентификация\n"
                 "/add_channel - Добавить канал\n"
                 "/my_channels - Ваши каналы\n"
+                "/ask - Поиск ответа в постах (RAG)\n"
+                "/search - Гибридный поиск\n"
                 "/help - Справка\n\n"
                 "⚠️ Для аутентификации используйте веб-форму из команды /auth"
+            )
+    
+    async def ask_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработка команды /ask - RAG-поиск ответа в постах"""
+        user = update.effective_user
+        args = context.args
+        
+        if not args:
+            await update.message.reply_text(
+                "💡 **Использование:** `/ask <ваш вопрос>`\n\n"
+                "**Примеры:**\n"
+                "• `/ask Что писали про нейросети на этой неделе?`\n"
+                "• `/ask Какие новости про Tesla?`\n"
+                "• `/ask Расскажи о блокчейн технологиях`",
+                parse_mode='Markdown'
+            )
+            return
+        
+        query_text = " ".join(args)
+        db = SessionLocal()
+        
+        try:
+            db_user = db.query(User).filter(User.telegram_id == user.id).first()
+            if not db_user:
+                await update.message.reply_text("❌ Пользователь не найден. Используйте /start")
+                return
+            
+            if not db_user.is_authenticated:
+                await update.message.reply_text(
+                    "❌ Для использования RAG-поиска необходимо пройти аутентификацию.\n"
+                    "Используйте команду /auth"
+                )
+                return
+            
+            # Проверяем наличие постов
+            posts_count = db.query(Post).filter(Post.user_id == db_user.id).count()
+            if posts_count == 0:
+                await update.message.reply_text(
+                    "📭 У вас пока нет постов в базе данных.\n\n"
+                    "💡 Добавьте каналы командой `/add_channel @channel_name`\n"
+                    "Парсинг начнется автоматически через несколько минут.",
+                    parse_mode='Markdown'
+                )
+                return
+            
+            # Отправляем "печатает..." индикатор
+            await update.message.chat.send_action(action="typing")
+            
+            # Вызов RAG service
+            result = await self._call_rag_service(
+                "/rag/query",
+                user_id=db_user.id,
+                query=query_text,
+                top_k=5,
+                min_score=0.7
+            )
+            
+            if not result:
+                await update.message.reply_text(
+                    "❌ RAG-сервис временно недоступен.\n\n"
+                    "💡 Попробуйте позже или обратитесь к администратору."
+                )
+                return
+            
+            # Проверяем ответ
+            if "error" in result:
+                await update.message.reply_text(f"❌ Ошибка: {result['error']}")
+                return
+            
+            answer = result.get("answer", "Не удалось сгенерировать ответ")
+            sources = result.get("sources", [])
+            
+            # Форматируем ответ
+            response_text = f"💡 **Ответ:**\n\n{answer}\n\n"
+            
+            if sources:
+                response_text += "📚 **Источники:**\n"
+                for i, source in enumerate(sources[:5], 1):
+                    channel = source.get("channel", "Неизвестный канал")
+                    url = source.get("url", "#")
+                    score = source.get("score", 0) * 100
+                    response_text += f"{i}. [{channel}]({url}) (релевантность: {score:.0f}%)\n"
+            else:
+                response_text += "\n💡 Источники не найдены. Попробуйте изменить запрос."
+            
+            await update.message.reply_text(
+                response_text,
+                parse_mode='Markdown',
+                disable_web_page_preview=True
+            )
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка команды /ask: {e}")
+            await update.message.reply_text(f"❌ Произошла ошибка: {str(e)}")
+        finally:
+            db.close()
+    
+    async def recommend_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработка команды /recommend - персональные рекомендации"""
+        user = update.effective_user
+        db = SessionLocal()
+        
+        try:
+            db_user = db.query(User).filter(User.telegram_id == user.id).first()
+            if not db_user:
+                await update.message.reply_text("❌ Пользователь не найден. Используйте /start")
+                return
+            
+            if not db_user.is_authenticated:
+                await update.message.reply_text(
+                    "❌ Для получения рекомендаций необходимо пройти аутентификацию.\n"
+                    "Используйте команду /auth"
+                )
+                return
+            
+            # Отправляем "печатает..." индикатор
+            await update.message.chat.send_action(action="typing")
+            
+            # Вызов RAG service
+            result = await self._call_rag_service(
+                f"/rag/recommend/{db_user.id}",
+                method="GET",
+                limit=5
+            )
+            
+            if not result:
+                await update.message.reply_text(
+                    "❌ Сервис рекомендаций временно недоступен.\n\n"
+                    "💡 Попробуйте позже."
+                )
+                return
+            
+            recommendations = result.get("recommendations", [])
+            
+            if not recommendations:
+                await update.message.reply_text(
+                    "💡 **Недостаточно данных для рекомендаций**\n\n"
+                    "Используйте команду `/ask` для поиска информации.\n"
+                    "Система проанализирует ваши интересы и начнет давать персональные рекомендации.\n\n"
+                    "**Пример:**\n"
+                    "• `/ask Что нового в AI?`\n"
+                    "• `/ask Расскажи про блокчейн`",
+                    parse_mode='Markdown'
+                )
+                return
+            
+            # Форматируем ответ
+            response_text = "🎯 **Рекомендации для вас:**\n\n"
+            
+            for i, rec in enumerate(recommendations, 1):
+                channel = rec.get("channel", "Неизвестный канал")
+                title = rec.get("title", "Без названия")
+                url = rec.get("url", "#")
+                score = rec.get("score", 0) * 100
+                
+                # Обрезаем длинный title
+                if len(title) > 100:
+                    title = title[:97] + "..."
+                
+                response_text += f"{i}. **[{channel}]({url})**\n"
+                response_text += f"   {title}\n"
+                response_text += f"   Релевантность: {score:.0f}%\n\n"
+            
+            response_text += "💡 Рекомендации основаны на анализе ваших интересов"
+            
+            await update.message.reply_text(
+                response_text,
+                parse_mode='Markdown',
+                disable_web_page_preview=True
+            )
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка команды /recommend: {e}")
+            await update.message.reply_text(f"❌ Произошла ошибка: {str(e)}")
+        finally:
+            db.close()
+    
+    async def search_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработка команды /search - гибридный поиск (посты + веб)"""
+        user = update.effective_user
+        args = context.args
+        
+        if not args:
+            await update.message.reply_text(
+                "🔍 **Использование:** `/search <запрос>`\n\n"
+                "**Примеры:**\n"
+                "• `/search квантовые компьютеры`\n"
+                "• `/search искусственный интеллект`\n"
+                "• `/search блокчейн технологии`\n\n"
+                "Поиск осуществляется в ваших постах + в интернете через Searxng",
+                parse_mode='Markdown'
+            )
+            return
+        
+        query_text = " ".join(args)
+        db = SessionLocal()
+        
+        try:
+            db_user = db.query(User).filter(User.telegram_id == user.id).first()
+            if not db_user:
+                await update.message.reply_text("❌ Пользователь не найден. Используйте /start")
+                return
+            
+            if not db_user.is_authenticated:
+                await update.message.reply_text(
+                    "❌ Для поиска необходимо пройти аутентификацию.\n"
+                    "Используйте команду /auth"
+                )
+                return
+            
+            # Отправляем "печатает..." индикатор
+            await update.message.chat.send_action(action="typing")
+            
+            # Вызов RAG service (hybrid search)
+            result = await self._call_rag_service(
+                "/rag/hybrid_search",
+                user_id=db_user.id,
+                query=query_text,
+                include_web=True,
+                include_posts=True,
+                limit=5
+            )
+            
+            if not result:
+                await update.message.reply_text(
+                    "❌ Сервис поиска временно недоступен.\n\n"
+                    "💡 Попробуйте позже."
+                )
+                return
+            
+            posts = result.get("posts", [])
+            web_results = result.get("web", [])
+            
+            # Форматируем ответ
+            response_text = f"🔍 **Результаты поиска:** {query_text}\n\n"
+            
+            if posts:
+                response_text += f"📱 **Ваши посты ({len(posts)}):**\n"
+                for i, post in enumerate(posts[:3], 1):
+                    channel = post.get("channel", "Неизвестный канал")
+                    snippet = post.get("snippet", post.get("text", ""))[:100]
+                    url = post.get("url", "#")
+                    response_text += f"{i}. [{channel}]({url})\n   {snippet}...\n\n"
+            else:
+                response_text += "📱 **Ваши посты:** Не найдено\n\n"
+            
+            if web_results:
+                response_text += f"🌐 **Интернет ({len(web_results)}):**\n"
+                for i, web in enumerate(web_results[:3], 1):
+                    title = web.get("title", "Без названия")
+                    url = web.get("url", "#")
+                    response_text += f"{i}. [{title}]({url})\n\n"
+            else:
+                response_text += "🌐 **Интернет:** Не найдено\n\n"
+            
+            # Добавляем кнопки фильтрации
+            keyboard = [
+                [
+                    InlineKeyboardButton("📱 Только посты", callback_data=f"search_posts_{query_text[:30]}"),
+                    InlineKeyboardButton("🌐 Только веб", callback_data=f"search_web_{query_text[:30]}")
+                ]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await update.message.reply_text(
+                response_text,
+                parse_mode='Markdown',
+                disable_web_page_preview=True,
+                reply_markup=reply_markup
+            )
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка команды /search: {e}")
+            await update.message.reply_text(f"❌ Произошла ошибка: {str(e)}")
+        finally:
+            db.close()
+    
+    async def handle_search_callback(self, query, context: ContextTypes.DEFAULT_TYPE):
+        """Обработка callback кнопок для команды /search"""
+        user = query.from_user
+        data = query.data
+        
+        # Парсим callback data
+        parts = data.split("_", 2)
+        if len(parts) < 3:
+            await query.answer("❌ Неверный формат данных")
+            return
+        
+        search_type = parts[1]  # "posts" или "web"
+        search_query = parts[2]
+        
+        db = SessionLocal()
+        
+        try:
+            db_user = db.query(User).filter(User.telegram_id == user.id).first()
+            if not db_user:
+                await query.answer("❌ Пользователь не найден")
+                return
+            
+            # Вызов RAG service с фильтрацией
+            result = await self._call_rag_service(
+                "/rag/hybrid_search",
+                user_id=db_user.id,
+                query=search_query,
+                include_web=(search_type == "web"),
+                include_posts=(search_type == "posts"),
+                limit=5
+            )
+            
+            if not result:
+                await query.answer("❌ Сервис недоступен")
+                return
+            
+            posts = result.get("posts", [])
+            web_results = result.get("web", [])
+            
+            # Форматируем ответ
+            response_text = f"🔍 **Результаты:** {search_query}\n\n"
+            
+            if search_type == "posts" and posts:
+                response_text += f"📱 **Посты ({len(posts)}):**\n"
+                for i, post in enumerate(posts, 1):
+                    channel = post.get("channel", "Неизвестный канал")
+                    snippet = post.get("snippet", post.get("text", ""))[:100]
+                    url = post.get("url", "#")
+                    response_text += f"{i}. [{channel}]({url})\n   {snippet}...\n\n"
+            elif search_type == "web" and web_results:
+                response_text += f"🌐 **Интернет ({len(web_results)}):**\n"
+                for i, web in enumerate(web_results, 1):
+                    title = web.get("title", "Без названия")
+                    url = web.get("url", "#")
+                    response_text += f"{i}. [{title}]({url})\n\n"
+            else:
+                response_text += "❌ Результаты не найдены"
+            
+            # Кнопка возврата к полному поиску
+            keyboard = [[
+                InlineKeyboardButton("🔄 Полный поиск", callback_data=f"search_both_{search_query[:30]}")
+            ]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(
+                response_text,
+                parse_mode='Markdown',
+                disable_web_page_preview=True,
+                reply_markup=reply_markup
+            )
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка обработки search callback: {e}")
+            await query.answer("❌ Произошла ошибка")
+        finally:
+            db.close()
+    
+    async def digest_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработка команды /digest - настройка AI-дайджестов"""
+        user = update.effective_user
+        db = SessionLocal()
+        
+        try:
+            db_user = db.query(User).filter(User.telegram_id == user.id).first()
+            if not db_user:
+                await update.message.reply_text("❌ Пользователь не найден. Используйте /start")
+                return
+            
+            if not db_user.is_authenticated:
+                await update.message.reply_text(
+                    "❌ Для настройки дайджестов необходимо пройти аутентификацию.\n"
+                    "Используйте команду /auth"
+                )
+                return
+            
+            # Получаем текущие настройки из RAG service
+            result = await self._call_rag_service(
+                f"/rag/digest/settings/{db_user.id}",
+                method="GET"
+            )
+            
+            if not result:
+                await update.message.reply_text(
+                    "❌ Не удалось получить настройки дайджеста.\n\n"
+                    "💡 RAG-сервис может быть недоступен."
+                )
+                return
+            
+            settings = result.get("settings", {})
+            enabled = settings.get("enabled", False)
+            frequency = settings.get("frequency", "daily")
+            time_str = settings.get("time", "09:00")
+            ai_summarize = settings.get("ai_summarize", False)
+            summary_style = settings.get("summary_style", "concise")
+            preferred_topics = settings.get("preferred_topics", [])
+            
+            # Форматируем текущие настройки
+            freq_text = "📅 Ежедневно" if frequency == "daily" else "📅 Еженедельно"
+            ai_text = "🤖 Включена" if ai_summarize else "🤖 Отключена"
+            style_map = {"concise": "Краткий", "detailed": "Детальный", "executive": "Executive"}
+            style_text = f"📊 {style_map.get(summary_style, summary_style)}"
+            topics_text = f"🏷️ Темы: {', '.join(preferred_topics)}" if preferred_topics else "🏷️ Темы: Не заданы"
+            
+            status_text = "✅ Включен" if enabled else "❌ Отключен"
+            
+            message_text = f"""
+⚙️ **Настройки дайджестов**
+
+📊 **Статус:** {status_text}
+{freq_text}
+🕐 Время: {time_str}
+{ai_text}
+{style_text}
+{topics_text}
+
+💡 Выберите параметр для изменения:
+            """
+            
+            # Создаем кнопки управления
+            keyboard = [
+                [InlineKeyboardButton("📅 Изменить частоту", callback_data="digest_frequency")],
+                [InlineKeyboardButton("🕐 Изменить время", callback_data="digest_time")],
+                [InlineKeyboardButton("🤖 Переключить AI-суммаризацию", callback_data="digest_ai_toggle")],
+                [InlineKeyboardButton("📊 Стиль суммаризации", callback_data="digest_style")],
+                [InlineKeyboardButton("🏷️ Мои темы", callback_data="digest_topics")],
+            ]
+            
+            if enabled:
+                keyboard.append([InlineKeyboardButton("❌ Отключить дайджест", callback_data="digest_disable")])
+            else:
+                keyboard.append([InlineKeyboardButton("✅ Включить дайджест", callback_data="digest_enable")])
+            
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await update.message.reply_text(
+                message_text,
+                parse_mode='Markdown',
+                reply_markup=reply_markup
+            )
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка команды /digest: {e}")
+            await update.message.reply_text(f"❌ Произошла ошибка: {str(e)}")
+        finally:
+            db.close()
+    
+    async def handle_digest_callback(self, query, context: ContextTypes.DEFAULT_TYPE):
+        """Обработка callback кнопок для настройки дайджестов"""
+        user = query.from_user
+        data = query.data
+        db = SessionLocal()
+        
+        try:
+            db_user = db.query(User).filter(User.telegram_id == user.id).first()
+            if not db_user:
+                await query.answer("❌ Пользователь не найден")
+                return
+            
+            # Получаем текущие настройки
+            result = await self._call_rag_service(
+                f"/rag/digest/settings/{db_user.id}",
+                method="GET"
+            )
+            
+            if not result:
+                await query.answer("❌ Ошибка получения настроек")
+                return
+            
+            settings = result.get("settings", {})
+            
+            # Обработка разных callback actions
+            if data == "digest_frequency":
+                # Показываем выбор частоты
+                keyboard = [
+                    [InlineKeyboardButton("📅 Ежедневно", callback_data="digest_freq_daily")],
+                    [InlineKeyboardButton("📅 Еженедельно", callback_data="digest_freq_weekly")],
+                    [InlineKeyboardButton("← Назад", callback_data="digest_back")]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await query.edit_message_text(
+                    "📅 **Выберите частоту дайджестов:**",
+                    parse_mode='Markdown',
+                    reply_markup=reply_markup
+                )
+            
+            elif data.startswith("digest_freq_"):
+                frequency = data.split("_")[-1]
+                # Обновляем настройки
+                update_result = await self._call_rag_service(
+                    f"/rag/digest/settings/{db_user.id}",
+                    enabled=settings.get("enabled", True),
+                    frequency=frequency,
+                    time=settings.get("time", "09:00"),
+                    ai_summarize=settings.get("ai_summarize", False),
+                    summary_style=settings.get("summary_style", "concise")
+                )
+                
+                if update_result:
+                    await query.answer("✅ Частота обновлена")
+                    # Возвращаемся к главному меню
+                    await self._show_digest_menu(query, db_user.id, edit=True)
+                else:
+                    await query.answer("❌ Ошибка обновления")
+            
+            elif data == "digest_time":
+                # Показываем выбор времени
+                keyboard = [
+                    [InlineKeyboardButton("🕘 09:00", callback_data="digest_time_09:00")],
+                    [InlineKeyboardButton("🕛 12:00", callback_data="digest_time_12:00")],
+                    [InlineKeyboardButton("🕕 18:00", callback_data="digest_time_18:00")],
+                    [InlineKeyboardButton("🕘 21:00", callback_data="digest_time_21:00")],
+                    [InlineKeyboardButton("← Назад", callback_data="digest_back")]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await query.edit_message_text(
+                    "🕐 **Выберите время отправки:**",
+                    parse_mode='Markdown',
+                    reply_markup=reply_markup
+                )
+            
+            elif data.startswith("digest_time_"):
+                time_value = data.split("_", 2)[-1]
+                # Обновляем настройки
+                update_result = await self._call_rag_service(
+                    f"/rag/digest/settings/{db_user.id}",
+                    enabled=settings.get("enabled", True),
+                    frequency=settings.get("frequency", "daily"),
+                    time=time_value,
+                    ai_summarize=settings.get("ai_summarize", False),
+                    summary_style=settings.get("summary_style", "concise")
+                )
+                
+                if update_result:
+                    await query.answer("✅ Время обновлено")
+                    await self._show_digest_menu(query, db_user.id, edit=True)
+                else:
+                    await query.answer("❌ Ошибка обновления")
+            
+            elif data == "digest_ai_toggle":
+                # Переключаем AI-суммаризацию
+                new_ai_state = not settings.get("ai_summarize", False)
+                update_result = await self._call_rag_service(
+                    f"/rag/digest/settings/{db_user.id}",
+                    enabled=settings.get("enabled", True),
+                    frequency=settings.get("frequency", "daily"),
+                    time=settings.get("time", "09:00"),
+                    ai_summarize=new_ai_state,
+                    summary_style=settings.get("summary_style", "concise")
+                )
+                
+                if update_result:
+                    status = "включена" if new_ai_state else "отключена"
+                    await query.answer(f"✅ AI-суммаризация {status}")
+                    await self._show_digest_menu(query, db_user.id, edit=True)
+                else:
+                    await query.answer("❌ Ошибка обновления")
+            
+            elif data == "digest_style":
+                # Показываем выбор стиля
+                keyboard = [
+                    [InlineKeyboardButton("📄 Краткий", callback_data="digest_style_concise")],
+                    [InlineKeyboardButton("📋 Детальный", callback_data="digest_style_detailed")],
+                    [InlineKeyboardButton("📊 Executive", callback_data="digest_style_executive")],
+                    [InlineKeyboardButton("← Назад", callback_data="digest_back")]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await query.edit_message_text(
+                    "📊 **Выберите стиль суммаризации:**\n\n"
+                    "• **Краткий** - только ключевые моменты\n"
+                    "• **Детальный** - подробный обзор\n"
+                    "• **Executive** - для руководителей",
+                    parse_mode='Markdown',
+                    reply_markup=reply_markup
+                )
+            
+            elif data.startswith("digest_style_"):
+                style = data.split("_")[-1]
+                # Обновляем настройки
+                update_result = await self._call_rag_service(
+                    f"/rag/digest/settings/{db_user.id}",
+                    enabled=settings.get("enabled", True),
+                    frequency=settings.get("frequency", "daily"),
+                    time=settings.get("time", "09:00"),
+                    ai_summarize=settings.get("ai_summarize", False),
+                    summary_style=style
+                )
+                
+                if update_result:
+                    await query.answer("✅ Стиль обновлен")
+                    await self._show_digest_menu(query, db_user.id, edit=True)
+                else:
+                    await query.answer("❌ Ошибка обновления")
+            
+            elif data == "digest_topics":
+                # Устанавливаем state для ввода тем
+                self.user_states[user.id] = {
+                    'action': 'digest_topics_input',
+                    'timestamp': time.time()
+                }
+                
+                await query.edit_message_text(
+                    "🏷️ **Введите ваши предпочитаемые темы**\n\n"
+                    "Отправьте темы через запятую.\n\n"
+                    "**Пример:**\n"
+                    "`AI, блокчейн, стартапы, технологии`\n\n"
+                    "Или отправьте `/cancel` для отмены",
+                    parse_mode='Markdown'
+                )
+            
+            elif data == "digest_enable":
+                # Включаем дайджест
+                update_result = await self._call_rag_service(
+                    f"/rag/digest/settings/{db_user.id}",
+                    enabled=True,
+                    frequency=settings.get("frequency", "daily"),
+                    time=settings.get("time", "09:00"),
+                    ai_summarize=settings.get("ai_summarize", False),
+                    summary_style=settings.get("summary_style", "concise")
+                )
+                
+                if update_result:
+                    await query.answer("✅ Дайджест включен")
+                    await self._show_digest_menu(query, db_user.id, edit=True)
+                else:
+                    await query.answer("❌ Ошибка обновления")
+            
+            elif data == "digest_disable":
+                # Отключаем дайджест
+                update_result = await self._call_rag_service(
+                    f"/rag/digest/settings/{db_user.id}",
+                    enabled=False,
+                    frequency=settings.get("frequency", "daily"),
+                    time=settings.get("time", "09:00"),
+                    ai_summarize=settings.get("ai_summarize", False),
+                    summary_style=settings.get("summary_style", "concise")
+                )
+                
+                if update_result:
+                    await query.answer("✅ Дайджест отключен")
+                    await self._show_digest_menu(query, db_user.id, edit=True)
+                else:
+                    await query.answer("❌ Ошибка обновления")
+            
+            elif data == "digest_back":
+                # Возврат к главному меню дайджестов
+                await self._show_digest_menu(query, db_user.id, edit=True)
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка обработки digest callback: {e}")
+            await query.answer("❌ Произошла ошибка")
+        finally:
+            db.close()
+    
+    async def _show_digest_menu(self, query_or_update, user_id: int, edit: bool = False):
+        """Показать меню настроек дайджестов"""
+        # Получаем настройки
+        result = await self._call_rag_service(
+            f"/rag/digest/settings/{user_id}",
+            method="GET"
+        )
+        
+        if not result:
+            message = "❌ Не удалось загрузить настройки"
+            if edit:
+                await query_or_update.edit_message_text(message)
+            else:
+                await query_or_update.message.reply_text(message)
+            return
+        
+        settings = result.get("settings", {})
+        enabled = settings.get("enabled", False)
+        frequency = settings.get("frequency", "daily")
+        time_str = settings.get("time", "09:00")
+        ai_summarize = settings.get("ai_summarize", False)
+        summary_style = settings.get("summary_style", "concise")
+        preferred_topics = settings.get("preferred_topics", [])
+        
+        # Форматируем текущие настройки
+        freq_text = "📅 Ежедневно" if frequency == "daily" else "📅 Еженедельно"
+        ai_text = "🤖 Включена" if ai_summarize else "🤖 Отключена"
+        style_map = {"concise": "Краткий", "detailed": "Детальный", "executive": "Executive"}
+        style_text = f"📊 {style_map.get(summary_style, summary_style)}"
+        topics_text = f"🏷️ Темы: {', '.join(preferred_topics)}" if preferred_topics else "🏷️ Темы: Не заданы"
+        status_text = "✅ Включен" if enabled else "❌ Отключен"
+        
+        message_text = f"""
+⚙️ **Настройки дайджестов**
+
+📊 **Статус:** {status_text}
+{freq_text}
+🕐 Время: {time_str}
+{ai_text}
+{style_text}
+{topics_text}
+
+💡 Выберите параметр для изменения:
+        """
+        
+        # Кнопки
+        keyboard = [
+            [InlineKeyboardButton("📅 Изменить частоту", callback_data="digest_frequency")],
+            [InlineKeyboardButton("🕐 Изменить время", callback_data="digest_time")],
+            [InlineKeyboardButton("🤖 Переключить AI-суммаризацию", callback_data="digest_ai_toggle")],
+            [InlineKeyboardButton("📊 Стиль суммаризации", callback_data="digest_style")],
+            [InlineKeyboardButton("🏷️ Мои темы", callback_data="digest_topics")],
+        ]
+        
+        if enabled:
+            keyboard.append([InlineKeyboardButton("❌ Отключить дайджест", callback_data="digest_disable")])
+        else:
+            keyboard.append([InlineKeyboardButton("✅ Включить дайджест", callback_data="digest_enable")])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        if edit:
+            await query_or_update.edit_message_text(
+                message_text,
+                parse_mode='Markdown',
+                reply_markup=reply_markup
+            )
+        else:
+            await query_or_update.reply_text(
+                message_text,
+                parse_mode='Markdown',
+                reply_markup=reply_markup
             )
     
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Справка по командам"""
         help_text = """
-🤖 Telegram Channel Parser Bot - Справка
+🤖 **Telegram Channel Parser Bot - Справка**
 
-🔐 Команды аутентификации:
+🔐 **Команды аутентификации:**
 /auth - Безопасная аутентификация через веб-форму
 /auth_status - Проверить статус аутентификации
 /logout - Выйти из системы
-/clear_auth - Очистить данные аутентификации (при блокировке)
-/reset_auth - Полный сброс аутентификации (алиас для /clear_auth)
+/clear_auth - Очистить данные (при блокировке)
 
-📋 Команды управления каналами:
-/add_channel @channel_name - Добавить канал для отслеживания
-Пример: /add_channel @example_channel
+📋 **Управление каналами:**
+/add_channel @channel_name - Добавить канал
+/my_channels - Список ваших каналов
+/remove_channel - Удалить канал
 
-/my_channels - Показать список ваших каналов
+🤖 **RAG & AI (новое):**
+/ask <вопрос> - Поиск ответа в постах
+/search <запрос> - Гибридный поиск (посты + веб)
+/recommend - Персональные рекомендации
+/digest - Настроить AI-дайджесты
 
-/remove_channel - Удалить канал из списка
+**Примеры RAG команд:**
+• `/ask Что нового в блокчейне?`
+• `/ask Расскажи про нейросети`
+• `/search квантовые компьютеры`
+• `/recommend`
 
-/help - Показать эту справку
+💡 **Как это работает:**
+1. Аутентификация: /auth
+2. Добавьте каналы: /add_channel
+3. Посты парсятся автоматически
+4. Используйте /ask для RAG-поиска
+5. Настройте дайджесты: /digest
 
-💡 Как это работает:
-1. Пройдите безопасную аутентификацию командой /auth
-2. Откройте веб-форму по ссылке из бота
-3. Введите ваши API данные и код в защищенной форме
-4. Добавьте каналы командой /add_channel
-5. Бот автоматически будет парсить новые посты
-6. Посты сохраняются в базе данных
-7. Вы можете анализировать их через n8n
-
-🔐 Для получения API_ID и API_HASH:
-1. Перейдите на https://my.telegram.org
-2. Войдите в свой аккаунт Telegram
-3. Создайте новое приложение
+🔐 **Получение API_ID и API_HASH:**
+1. https://my.telegram.org
+2. Войдите в Telegram
+3. Создайте приложение
 4. Скопируйте API_ID и API_HASH
 
-⚠️ БЕЗОПАСНОСТЬ:
-- Никогда не вводите коды аутентификации в Telegram чат!
-- Используйте только веб-форму из команды /auth
-- Веб-форма защищена HTTPS шифрованием
-- Ваши данные зашифрованы в базе данных
-
-❓ Если у вас есть вопросы, обратитесь к администратору.
+⚠️ **БЕЗОПАСНОСТЬ:**
+- Не вводите коды в чат!
+- Используйте веб-форму /auth
+- Данные зашифрованы в БД
         """
-        await update.message.reply_text(help_text)
+        await update.message.reply_text(help_text, parse_mode='Markdown')
     
     def run(self):
         """Запуск бота"""

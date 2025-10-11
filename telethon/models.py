@@ -57,6 +57,8 @@ class User(Base):
         back_populates="users"
     )
     posts = relationship("Post", back_populates="user", cascade="all, delete-orphan")
+    digest_settings = relationship("DigestSettings", back_populates="user", uselist=False, cascade="all, delete-orphan")
+    query_history = relationship("RAGQueryHistory", back_populates="user", cascade="all, delete-orphan")
     
     def set_encrypted_api_hash(self, api_hash: str):
         """Установить зашифрованный API hash"""
@@ -331,6 +333,9 @@ class Post(Base):
     parsed_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     tags = Column(JSON, nullable=True)  # Массив тегов в формате JSON ["технологии", "новости"]
     
+    # Обогащенный контент (текст + контент из ссылок)
+    enriched_content = Column(Text, nullable=True)  # Для RAG индексации с контентом ссылок
+    
     # Поля для отслеживания тегирования
     tagging_status = Column(String, default="pending")  # pending, success, failed, retrying
     tagging_attempts = Column(Integer, default=0)  # Количество попыток тегирования
@@ -339,4 +344,81 @@ class Post(Base):
     
     # Связи
     user = relationship("User", back_populates="posts")
-    channel = relationship("Channel", back_populates="posts") 
+    channel = relationship("Channel", back_populates="posts")
+
+
+class DigestSettings(Base):
+    """Настройки дайджестов пользователя"""
+    __tablename__ = "digest_settings"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), unique=True, nullable=False)
+    
+    # Расписание
+    enabled = Column(Boolean, default=False)
+    frequency = Column(String, default="daily")  # daily, weekly, custom
+    time = Column(String, default="09:00")       # HH:MM
+    days_of_week = Column(JSON, nullable=True)   # [1,2,3] для weekly (1=Monday, 7=Sunday)
+    timezone = Column(String, default="Europe/Moscow")
+    
+    # Контент
+    channels = Column(JSON, nullable=True)        # channel_ids или null (все каналы)
+    tags = Column(JSON, nullable=True)            # tags или null (все теги)
+    format = Column(String, default="markdown")   # markdown, html, plain
+    max_posts = Column(Integer, default=20)
+    
+    # Доставка
+    delivery_method = Column(String, default="telegram")  # telegram, email
+    email = Column(String, nullable=True)
+    
+    # История
+    last_sent_at = Column(DateTime, nullable=True)
+    next_scheduled_at = Column(DateTime, nullable=True)
+    
+    # AI Summarization
+    ai_summarize = Column(Boolean, default=False)  # Включить AI-суммаризацию
+    preferred_topics = Column(JSON, nullable=True)  # Список предпочитаемых тем: ["криптовалюты", "авто"]
+    summary_style = Column(String, default="concise")  # concise, detailed, executive
+    topics_limit = Column(Integer, default=5)  # Максимум тем в дайджесте (3-5)
+    
+    # Связи
+    user = relationship("User", back_populates="digest_settings")
+
+
+class IndexingStatus(Base):
+    """Статус индексации постов в Qdrant"""
+    __tablename__ = "indexing_status"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    post_id = Column(Integer, ForeignKey("posts.id"), nullable=False, index=True)
+    
+    indexed_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    vector_id = Column(String, nullable=True)  # ID в Qdrant
+    status = Column(String, default="success", index=True)  # success, failed, pending
+    error = Column(Text, nullable=True)
+    
+    # Связи
+    user = relationship("User")
+    post = relationship("Post")
+    
+    # Уникальность комбинации user_id + post_id
+    __table_args__ = (
+        UniqueConstraint('user_id', 'post_id', name='uix_user_post'),
+    )
+
+
+class RAGQueryHistory(Base):
+    """История RAG-запросов пользователя для анализа интересов"""
+    __tablename__ = "rag_query_history"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    query = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+    
+    # Извлеченные темы/ключевые слова из запроса
+    extracted_topics = Column(JSON, nullable=True)
+    
+    # Связи
+    user = relationship("User", back_populates="query_history") 

@@ -2,6 +2,7 @@ import asyncio
 import schedule
 import time
 import os
+import re
 from datetime import datetime, timezone, timedelta
 from database import SessionLocal
 from models import Channel, Post, User
@@ -210,6 +211,9 @@ class ParserService:
                         db.flush()  # Получаем ID нового поста
                         self.new_post_ids.append(new_post.id)  # Добавляем ID для тегирования
                         posts_added += 1
+                        
+                        # Обогащаем пост контентом ссылок (если включено)
+                        await self._enrich_post_with_links(new_post, db)
             
             # Обновляем время последнего парсинга для этого пользователя
             channel.update_user_subscription(db, user, last_parsed_at=datetime.now(timezone.utc))
@@ -327,8 +331,193 @@ class ParserService:
             from tagging_service import tagging_service
             if self.new_post_ids:
                 await tagging_service.process_posts_batch(self.new_post_ids)
+                
+                # Уведомляем RAG-сервис о новых постах для индексации
+                await self._notify_rag_service(self.new_post_ids)
         except Exception as e:
             logger.error(f"❌ ParserService: Ошибка фонового тегирования: {str(e)}")
+    
+    def _extract_urls(self, text: str) -> List[str]:
+        """
+        Извлечение URL из текста поста
+        
+        Args:
+            text: Текст поста
+            
+        Returns:
+            Список найденных URL
+        """
+        if not text:
+            return []
+        
+        # Regex для поиска URL
+        url_pattern = r'https?://[^\s<>"{}|\\^`\[\]]+'
+        urls = re.findall(url_pattern, text)
+        return urls
+    
+    async def _enrich_post_with_links(self, post: Post, db: SessionLocal):
+        """
+        Обогащение поста контентом из ссылок через Crawl4AI
+        
+        Args:
+            post: Объект Post
+            db: Сессия базы данных
+        """
+        crawl4ai_enabled = os.getenv("CRAWL4AI_ENABLED", "false").lower() == "true"
+        
+        if not crawl4ai_enabled:
+            return
+        
+        urls = self._extract_urls(post.text)
+        if not urls:
+            return
+        
+        # Берем первую ссылку для обогащения
+        url = urls[0]
+        crawl4ai_url = os.getenv("CRAWL4AI_URL", "http://crawl4ai:11235")
+        word_threshold = int(os.getenv("CRAWL4AI_WORD_THRESHOLD", "100"))
+        timeout = float(os.getenv("CRAWL4AI_TIMEOUT", "30"))
+        
+        try:
+            import httpx
+            
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                # Правильный формат API: urls как массив
+                response = await client.post(
+                    f"{crawl4ai_url}/crawl",
+                    json={
+                        "urls": [url]  # Массив URL, не одна строка!
+                    }
+                )
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    
+                    # Проверяем успешность и наличие результатов
+                    if result.get("success") and result.get("results"):
+                        first_result = result["results"][0]
+                        
+                        # markdown - это словарь с разными форматами
+                        markdown_data = first_result.get("markdown", {})
+                        
+                        # Используем raw_markdown для извлечения текста
+                        content = ""
+                        if isinstance(markdown_data, dict):
+                            content = markdown_data.get("raw_markdown", "")
+                        elif isinstance(markdown_data, str):
+                            content = markdown_data
+                        
+                        # Проверяем минимальную длину контента
+                        if content and len(content) >= word_threshold:
+                            # Добавляем обогащенный контент к посту (ограничиваем 3000 символов)
+                            post.enriched_content = f"{post.text}\n\n[Содержимое ссылки: {url}]\n{content[:3000]}"
+                            db.commit()
+                            logger.info(f"✅ ParserService: Пост {post.id} обогащен контентом ссылки {url} ({len(content)} символов)")
+                        else:
+                            logger.debug(f"ParserService: Ссылка {url} не содержит достаточно контента ({len(content)} символов < {word_threshold})")
+                    else:
+                        logger.warning(f"⚠️ ParserService: Crawl4AI не вернул результаты для {url}")
+                else:
+                    logger.warning(f"⚠️ ParserService: Crawl4AI вернул статус {response.status_code} для {url}")
+                    
+        except httpx.TimeoutException:
+            logger.warning(f"⏳ ParserService: Timeout при извлечении контента из {url}")
+        except httpx.ConnectError:
+            logger.warning(f"🔌 ParserService: Crawl4AI недоступен")
+        except Exception as e:
+            logger.error(f"❌ ParserService: Ошибка обогащения поста {post.id}: {e}")
+    
+    async def _notify_rag_service(self, post_ids: List[int]):
+        """
+        Уведомление RAG-сервиса о новых постах для индексации
+        
+        Args:
+            post_ids: Список ID новых постов
+        """
+        try:
+            import httpx
+            rag_service_url = os.getenv("RAG_SERVICE_URL", "http://rag-service:8020")
+            rag_enabled = os.getenv("RAG_SERVICE_ENABLED", "true").lower() == "true"
+            
+            if not rag_enabled or not post_ids:
+                return
+            
+            # Пробуем уведомить RAG-сервис с retry
+            max_retries = 3
+            retry_delay = 2.0  # секунды
+            
+            for attempt in range(max_retries):
+                try:
+                    async with httpx.AsyncClient(timeout=10.0) as client:
+                        response = await client.post(
+                            f"{rag_service_url}/rag/index/batch",
+                            json={"post_ids": post_ids}
+                        )
+                        
+                        if response.status_code == 200:
+                            logger.info(f"✅ ParserService: RAG-сервис уведомлен о {len(post_ids)} новых постах")
+                            return  # Успех
+                        elif response.status_code >= 500:
+                            # Server error - можно retry
+                            if attempt < max_retries - 1:
+                                logger.warning(f"⚠️ ParserService: RAG-сервис вернул {response.status_code}, retry {attempt+1}/{max_retries}")
+                                await asyncio.sleep(retry_delay * (attempt + 1))
+                                continue
+                            else:
+                                logger.error(f"❌ ParserService: RAG-сервис недоступен после {max_retries} попыток")
+                        else:
+                            # Client error - не retry
+                            logger.warning(f"⚠️ ParserService: RAG-сервис вернул статус {response.status_code}: {response.text[:200]}")
+                            return
+                            
+                except httpx.TimeoutException:
+                    if attempt < max_retries - 1:
+                        logger.warning(f"⏳ ParserService: Timeout RAG-сервиса, retry {attempt+1}/{max_retries}")
+                        await asyncio.sleep(retry_delay * (attempt + 1))
+                        continue
+                    else:
+                        logger.error(f"❌ ParserService: RAG-сервис timeout после {max_retries} попыток")
+                except httpx.ConnectError:
+                    if attempt < max_retries - 1:
+                        logger.warning(f"🔌 ParserService: RAG-сервис недоступен, retry {attempt+1}/{max_retries}")
+                        await asyncio.sleep(retry_delay * (attempt + 1))
+                        continue
+                    else:
+                        logger.error(f"❌ ParserService: Невозможно подключиться к RAG-сервису после {max_retries} попыток")
+            
+            # Если все попытки неудачны, сохраняем в БД для последующей индексации
+            db = SessionLocal()
+            try:
+                # Помечаем посты как pending для индексации
+                from models import IndexingStatus
+                for post_id in post_ids:
+                    post = db.query(Post).filter(Post.id == post_id).first()
+                    if post:
+                        existing = db.query(IndexingStatus).filter(
+                            IndexingStatus.user_id == post.user_id,
+                            IndexingStatus.post_id == post_id
+                        ).first()
+                        
+                        if not existing:
+                            status = IndexingStatus(
+                                user_id=post.user_id,
+                                post_id=post_id,
+                                status="pending",
+                                error="RAG service unavailable during parsing"
+                            )
+                            db.add(status)
+                
+                db.commit()
+                logger.info(f"💾 ParserService: {len(post_ids)} постов помечены как pending для индексации")
+            except Exception as db_err:
+                logger.error(f"❌ ParserService: Ошибка сохранения pending статуса: {db_err}")
+                db.rollback()
+            finally:
+                db.close()
+                    
+        except Exception as e:
+            logger.error(f"❌ ParserService: Критическая ошибка уведомления RAG-сервиса: {e}")
+            # Не прерываем работу парсера из-за ошибки RAG-сервиса
 
 
 # Функция для запуска сервиса
