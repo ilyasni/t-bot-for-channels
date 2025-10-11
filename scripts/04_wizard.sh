@@ -213,6 +213,17 @@ else
     done
 fi
 
+echo
+log_info "======================================================================="
+log_info "Additional Services (always active via docker-compose.override.yml):"
+echo "  - Telegram Channel Parser (ports 8010, 8001)"
+echo "    API: http://localhost:8010"
+echo "    Auth: http://localhost:8001"
+echo "  - GPT2Giga Proxy (port 8090)"
+echo "    OpenAI-compatible API for GigaChat"
+log_info "======================================================================="
+echo
+
 # Update or add COMPOSE_PROFILES in .env file
 # Ensure .env file exists (it should have been created by 03_generate_secrets.sh or exist from previous run)
 if [ ! -f "$ENV_FILE" ]; then

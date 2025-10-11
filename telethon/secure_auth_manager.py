@@ -508,7 +508,11 @@ class SecureAuthManager:
                 request_retries=3
             )
             
+            # Автоматическая обработка коротких flood waits
+            client.flood_sleep_threshold = 120  # Авто-sleep если wait < 2 минут
+            
             logger.info(f"✅ Создан клиент для пользователя {user.telegram_id}")
+            logger.info(f"✅ Установлен flood_sleep_threshold=120s для пользователя {user.telegram_id}")
             return client
             
         except Exception as e:

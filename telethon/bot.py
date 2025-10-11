@@ -401,22 +401,18 @@ class TelegramBot:
                 )
                 return
             
-            # Проверяем, не добавлен ли уже канал
-            existing_channel = db.query(Channel).filter(
-                Channel.user_id == db_user.id,
-                Channel.channel_username == channel_username
-            ).first()
+            # Проверяем, не подписан ли уже пользователь на этот канал
+            if db_user.channels:
+                for channel in db_user.channels:
+                    if channel.channel_username == channel_username:
+                        await update.message.reply_text(f"❌ Канал @{channel_username} уже добавлен в ваш список")
+                        return
             
-            if existing_channel:
-                await update.message.reply_text(f"❌ Канал @{channel_username} уже добавлен в ваш список")
-                return
+            # Получаем или создаем канал (может быть уже добавлен другими пользователями)
+            channel = Channel.get_or_create(db, channel_username)
             
-            # Создаем новый канал
-            new_channel = Channel(
-                user_id=db_user.id,
-                channel_username=channel_username
-            )
-            db.add(new_channel)
+            # Добавляем пользователя к каналу
+            channel.add_user(db, db_user, is_active=True)
             db.commit()
             
             await update.message.reply_text(
@@ -448,9 +444,10 @@ class TelegramBot:
                 )
                 return
             
-            channels = db.query(Channel).filter(Channel.user_id == db_user.id).all()
+            # Получаем каналы пользователя с информацией о подписке
+            channels_with_info = db_user.get_all_channels(db)
             
-            if not channels:
+            if not channels_with_info:
                 await update.message.reply_text(
                     "📭 У вас пока нет добавленных каналов.\n"
                     "Добавьте канал командой /add_channel @channel_name"
@@ -460,8 +457,8 @@ class TelegramBot:
             text = "📋 Ваши каналы:\n\n"
             keyboard = []
             
-            for i, channel in enumerate(channels):
-                status = "✅ Активен" if channel.is_active else "❌ Неактивен"
+            for i, (channel, sub_info) in enumerate(channels_with_info):
+                status = "✅ Активен" if sub_info['is_active'] else "❌ Неактивен"
                 text += f"{i+1}. @{channel.channel_username} - {status}\n"
                 
                 # Создаем кнопку для удаления
@@ -496,7 +493,7 @@ class TelegramBot:
             await self.remove_channel_by_id(query, channel_id)
     
     async def remove_channel_by_id(self, query, channel_id: int):
-        """Удаление канала по ID"""
+        """Удаление канала (отписка пользователя от канала)"""
         user = query.from_user
         db = SessionLocal()
         
@@ -506,20 +503,35 @@ class TelegramBot:
                 await query.edit_message_text("❌ Пользователь не найден")
                 return
             
-            channel = db.query(Channel).filter(
-                Channel.id == channel_id,
-                Channel.user_id == db_user.id
-            ).first()
+            # Получаем канал
+            channel = db.query(Channel).filter(Channel.id == channel_id).first()
             
             if not channel:
                 await query.edit_message_text("❌ Канал не найден")
                 return
             
+            # Проверяем, подписан ли пользователь на этот канал
+            if channel not in db_user.channels:
+                await query.edit_message_text("❌ Вы не подписаны на этот канал")
+                return
+            
             channel_username = channel.channel_username
-            db.delete(channel)
+            
+            # Отписываем пользователя от канала
+            channel.remove_user(db, db_user)
             db.commit()
             
-            await query.edit_message_text(f"✅ Канал @{channel_username} успешно удален!")
+            # Проверяем, остались ли еще подписчики у канала
+            if not channel.users:
+                # Если это был последний подписчик, удаляем канал
+                db.delete(channel)
+                db.commit()
+                await query.edit_message_text(
+                    f"✅ Канал @{channel_username} успешно удален!\n"
+                    f"(Больше нет подписчиков на этот канал)"
+                )
+            else:
+                await query.edit_message_text(f"✅ Вы отписались от канала @{channel_username}!")
             
         except Exception as e:
             await query.edit_message_text(f"❌ Ошибка при удалении: {str(e)}")

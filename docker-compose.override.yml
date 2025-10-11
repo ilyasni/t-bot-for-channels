@@ -20,16 +20,19 @@ services:
       # Монтируем .env файл
       - ./telethon/.env:/app/.env
     environment:
-      - API_ID=${API_ID}
-      - API_HASH=${API_HASH}
-      - PHONE=${PHONE}
-      - AUTH_CODE=${AUTH_CODE}
       # Переменные окружения (будут переопределены из .env файла)
       - HOST=0.0.0.0
       - PORT=8010
       - PARSER_INTERVAL_MINUTES=30
       # База данных - по умолчанию SQLite, можно переопределить на PostgreSQL
       - DATABASE_URL=${TELEGRAM_DATABASE_URL:-sqlite:///./data/telethon_bot.db}
+      # Telegram Bot Token
+      - BOT_TOKEN=${BOT_TOKEN}
+      # Ключ шифрования (общий для всего проекта)
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      # Система хранения постов
+      - DEFAULT_RETENTION_DAYS=${DEFAULT_RETENTION_DAYS:-30}
+      - CLEANUP_SCHEDULE_TIME=${CLEANUP_SCHEDULE_TIME:-03:00}
       # Часовой пояс
       - TZ=Europe/Moscow
     restart: unless-stopped
@@ -54,13 +57,12 @@ services:
       # Монтируем .env файл
       - ./telethon/.env:/app/.env
     environment:
-      - API_ID=${API_ID}
-      - API_HASH=${API_HASH}
-      - PHONE=${PHONE}
-      - AUTH_CODE=${AUTH_CODE}
-      - BOT_TOKEN=${BOT_TOKEN}
       # База данных - по умолчанию SQLite, можно переопределить на PostgreSQL
       - DATABASE_URL=${TELEGRAM_DATABASE_URL:-sqlite:///./data/telethon_bot.db}
+      # Telegram Bot Token
+      - BOT_TOKEN=${BOT_TOKEN}
+      # Ключ шифрования (общий для всего проекта)
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
     restart: unless-stopped
     networks:
       - localai_default
@@ -72,7 +74,13 @@ services:
     container_name: gpt2giga-proxy
     ports:
       - "8090:8090"
+    environment:
+      # GigaChat API credentials (get from Sber)
+      - GIGACHAT_CREDENTIALS=${GIGACHAT_CREDENTIALS}
+      - PROXY_HOST=0.0.0.0
     restart: unless-stopped
+    networks:
+      - localai_default
 
 networks:
   localai_default:
