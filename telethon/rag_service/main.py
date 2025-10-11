@@ -842,6 +842,124 @@ async def get_user_interests(user_id: int):
         raise HTTPException(500, f"Ошибка получения интересов: {str(e)}")
 
 
+@app.get("/rag/recommend/{user_id}")
+async def get_recommendations(user_id: int, limit: int = 5):
+    """
+    Получить персональные рекомендации на основе интересов пользователя
+    
+    Args:
+        user_id: ID пользователя
+        limit: Количество рекомендаций (по умолчанию 5)
+        
+    Returns:
+        Список рекомендованных постов с релевантностью
+    """
+    try:
+        from ai_digest_generator import ai_digest_generator
+        from sqlalchemy.orm import joinedload
+        
+        logger.info(f"🎯 Генерация рекомендаций для user {user_id}")
+        
+        db = SessionLocal()
+        try:
+            user = db.query(User).filter(User.id == user_id).first()
+            if not user:
+                raise HTTPException(404, f"Пользователь {user_id} не найден")
+            
+            # Получаем интересы пользователя
+            interests = await ai_digest_generator.get_user_interests_summary(user_id)
+            combined_topics = interests.get('combined_topics', [])
+            
+            if not combined_topics:
+                logger.info(f"   💡 Нет данных об интересах для user {user_id}")
+                return {
+                    "recommendations": [],
+                    "message": "Недостаточно данных для рекомендаций. Используйте /ask для анализа интересов."
+                }
+            
+            logger.info(f"   🔍 Темы интересов: {', '.join(combined_topics[:3])}...")
+            
+            # Собираем релевантные посты для каждой темы
+            all_recommendations = []
+            seen_post_ids = set()
+            
+            for topic in combined_topics[:3]:  # Топ-3 темы
+                try:
+                    # Векторный поиск по теме
+                    embedding, provider = await embeddings_service.generate_embedding(topic)
+                    if not embedding:
+                        continue
+                    
+                    results = await qdrant_client.search(
+                        user_id=user_id,
+                        query_vector=embedding,
+                        limit=5,
+                        score_threshold=0.6
+                    )
+                    
+                    # Добавляем уникальные результаты
+                    for result in results:
+                        post_id = result['payload']['post_id']
+                        if post_id not in seen_post_ids:
+                            seen_post_ids.add(post_id)
+                            all_recommendations.append({
+                                'post_id': post_id,
+                                'score': result['score'],
+                                'topic': topic
+                            })
+                    
+                except Exception as e:
+                    logger.error(f"   ❌ Ошибка поиска по теме '{topic}': {e}")
+                    continue
+            
+            # Сортируем по score
+            all_recommendations.sort(key=lambda x: x['score'], reverse=True)
+            top_recommendations = all_recommendations[:limit]
+            
+            if not top_recommendations:
+                logger.info(f"   💡 Посты не найдены для тем: {combined_topics}")
+                return {
+                    "recommendations": [],
+                    "message": "Релевантные посты не найдены. Попробуйте добавить больше каналов."
+                }
+            
+            # Обогащаем данными из БД
+            enriched_recommendations = []
+            for rec in top_recommendations:
+                post = db.query(Post).options(
+                    joinedload(Post.channel)
+                ).filter(Post.id == rec['post_id']).first()
+                
+                if post:
+                    enriched_recommendations.append({
+                        'post_id': post.id,
+                        'channel': post.channel.channel_username if post.channel else 'unknown',
+                        'title': post.text[:100] if post.text else 'Без текста',
+                        'url': post.url,
+                        'score': rec['score'],
+                        'topic': rec['topic'],
+                        'posted_at': post.posted_at.isoformat() if post.posted_at else None
+                    })
+            
+            logger.info(f"   ✅ Найдено {len(enriched_recommendations)} рекомендаций")
+            
+            return {
+                "recommendations": enriched_recommendations,
+                "based_on_topics": combined_topics[:3]
+            }
+            
+        finally:
+            db.close()
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Ошибка генерации рекомендаций: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(500, f"Ошибка генерации рекомендаций: {str(e)}")
+
+
 # ============================================================================
 # Hybrid Search (Посты + Веб через Searxng)
 # ============================================================================
@@ -948,35 +1066,56 @@ async def hybrid_search(request: HybridSearchRequest):
         # Поиск в постах пользователя (через векторный поиск)
         if request.include_posts:
             try:
-                # Используем существующий поиск через Qdrant
-                db = SessionLocal()
-                posts = db.query(Post).filter(Post.user_id == request.user_id).limit(100).all()
-                db.close()
+                from sqlalchemy.orm import joinedload
                 
-                # Простой keyword search (можно улучшить через векторный поиск)
-                query_lower = request.query.lower()
-                matched_posts = []
+                # Используем векторный поиск для семантического понимания
+                embedding, provider = await embeddings_service.generate_embedding(request.query)
                 
-                for post in posts:
-                    if post.text and query_lower in post.text.lower():
-                        matched_posts.append({
-                            "post_id": post.id,
-                            "channel": post.channel.channel_username if post.channel else "unknown",
-                            "text": post.text[:300],
-                            "snippet": post.text[:150],
-                            "url": post.url,
-                            "posted_at": post.posted_at.isoformat() if post.posted_at else None,
-                            "tags": post.tags
-                        })
+                if embedding:
+                    # Векторный поиск в Qdrant
+                    search_results = await qdrant_client.search(
+                        user_id=request.user_id,
+                        query_vector=embedding,
+                        limit=request.limit,
+                        score_threshold=0.5  # Более низкий порог для широкого поиска
+                    )
+                    
+                    # Обогащаем данными из БД
+                    db = SessionLocal()
+                    try:
+                        matched_posts = []
+                        for result in search_results:
+                            post_id = result['payload']['post_id']
+                            
+                            post = db.query(Post).options(
+                                joinedload(Post.channel)
+                            ).filter(Post.id == post_id).first()
+                            
+                            if post:
+                                matched_posts.append({
+                                    "post_id": post.id,
+                                    "channel": post.channel.channel_username if post.channel else "unknown",
+                                    "text": post.text[:300] if post.text else "",
+                                    "snippet": post.text[:150] if post.text else "",
+                                    "url": post.url,
+                                    "posted_at": post.posted_at.isoformat() if post.posted_at else None,
+                                    "tags": post.tags,
+                                    "score": result['score']
+                                })
                         
-                        if len(matched_posts) >= request.limit:
-                            break
-                
-                results["posts"] = matched_posts
-                logger.info(f"   📱 Найдено постов: {len(matched_posts)}")
+                        results["posts"] = matched_posts
+                        logger.info(f"   📱 Найдено постов: {len(matched_posts)}")
+                    finally:
+                        db.close()
+                else:
+                    logger.warning(f"   ⚠️ Не удалось сгенерировать embedding для запроса")
+                    results["posts"] = []
                 
             except Exception as e:
                 logger.error(f"❌ Ошибка поиска в постах: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+                results["posts"] = []
         
         # Поиск в интернете через Searxng
         if request.include_web:

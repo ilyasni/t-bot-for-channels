@@ -23,12 +23,19 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 class TelegramBot:
     def __init__(self):
-        self.application = Application.builder().token(BOT_TOKEN).build()
+        # Создаем application с явным указанием получаемых updates
+        self.application = (
+            Application.builder()
+            .token(BOT_TOKEN)
+            .build()
+        )
         self.setup_handlers()
         # Словарь для хранения состояний пользователей
         self.user_states = {}
         # Таймаут для состояний (30 минут)
         self.state_timeout = 30 * 60  # 30 минут в секундах
+        
+        logger.info("✅ TelegramBot инициализирован с поддержкой всех типов updates")
     
     def _cleanup_expired_states(self):
         """Очистка устаревших состояний пользователей"""
@@ -99,8 +106,8 @@ class TelegramBot:
         
         Args:
             endpoint: Endpoint RAG service (например, "/rag/query")
-            method: HTTP метод (GET или POST)
-            **kwargs: Параметры запроса (для POST - json, для GET - params)
+            method: HTTP метод (GET, POST, PUT)
+            **kwargs: Параметры запроса (для POST/PUT - json, для GET - params)
             
         Returns:
             Dict с ответом или None в случае ошибки
@@ -114,10 +121,17 @@ class TelegramBot:
         
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
-                if method.upper() == "GET":
+                method_upper = method.upper()
+                
+                if method_upper == "GET":
                     response = await client.get(
                         f"{rag_url}{endpoint}",
                         params=kwargs
+                    )
+                elif method_upper == "PUT":
+                    response = await client.put(
+                        f"{rag_url}{endpoint}",
+                        json=kwargs
                     )
                 else:  # POST
                     response = await client.post(
@@ -143,6 +157,8 @@ class TelegramBot:
     
     def setup_handlers(self):
         """Настройка обработчиков команд"""
+        logger.info("🔧 Настройка обработчиков команд...")
+        
         # Основные команды
         self.application.add_handler(CommandHandler("start", self.start_command))
         self.application.add_handler(CommandHandler("auth", self.auth_command))
@@ -164,6 +180,8 @@ class TelegramBot:
         # Callback и текстовые сообщения
         self.application.add_handler(CallbackQueryHandler(self.button_callback))
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text))
+        
+        logger.info("✅ Обработчики команд зарегистрированы (включая CallbackQueryHandler)")
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработка команды /start"""
@@ -556,15 +574,24 @@ class TelegramBot:
     async def button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработка нажатий на кнопки"""
         query = update.callback_query
+        user = query.from_user
+        
+        logger.info(f"🔘 Получен callback от пользователя {user.id}: {query.data}")
+        
         await query.answer()
         
         if query.data.startswith("remove_"):
+            logger.info(f"  → Обработка remove_channel: {query.data}")
             channel_id = int(query.data.split("_")[1])
             await self.remove_channel_by_id(query, channel_id)
         elif query.data.startswith("digest_"):
+            logger.info(f"  → Обработка digest callback: {query.data}")
             await self.handle_digest_callback(query, context)
         elif query.data.startswith("search_"):
+            logger.info(f"  → Обработка search callback: {query.data}")
             await self.handle_search_callback(query, context)
+        else:
+            logger.warning(f"  → Неизвестный callback: {query.data}")
     
     async def remove_channel_by_id(self, query, channel_id: int):
         """Удаление канала (отписка пользователя от канала)"""
@@ -647,11 +674,12 @@ class TelegramBot:
                     )
                     
                     if result:
-                        settings = result.get("settings", {})
+                        settings = result  # API возвращает данные напрямую
                         
                         # Обновляем с новыми темами
                         update_result = await self._call_rag_service(
                             f"/rag/digest/settings/{db_user.id}",
+                            method="PUT",
                             enabled=settings.get("enabled", True),
                             frequency=settings.get("frequency", "daily"),
                             time=settings.get("time", "09:00"),
@@ -939,6 +967,13 @@ class TelegramBot:
             posts = result.get("posts", [])
             web_results = result.get("web", [])
             
+            # Сохраняем запрос в состоянии пользователя для callback
+            self.user_states[user.id] = {
+                'action': 'search_query',
+                'query': query_text,
+                'timestamp': time.time()
+            }
+            
             # Форматируем ответ
             response_text = f"🔍 **Результаты поиска:** {query_text}\n\n"
             
@@ -961,11 +996,11 @@ class TelegramBot:
             else:
                 response_text += "🌐 **Интернет:** Не найдено\n\n"
             
-            # Добавляем кнопки фильтрации
+            # Добавляем кнопки фильтрации (без текста запроса в callback_data)
             keyboard = [
                 [
-                    InlineKeyboardButton("📱 Только посты", callback_data=f"search_posts_{query_text[:30]}"),
-                    InlineKeyboardButton("🌐 Только веб", callback_data=f"search_web_{query_text[:30]}")
+                    InlineKeyboardButton("📱 Только посты", callback_data="search_posts"),
+                    InlineKeyboardButton("🌐 Только веб", callback_data="search_web")
                 ]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
@@ -988,14 +1023,24 @@ class TelegramBot:
         user = query.from_user
         data = query.data
         
-        # Парсим callback data
-        parts = data.split("_", 2)
-        if len(parts) < 3:
-            await query.answer("❌ Неверный формат данных")
+        # Получаем запрос из состояния пользователя
+        user_state = self.user_states.get(user.id)
+        if not user_state or user_state.get('action') != 'search_query':
+            await query.answer("❌ Запрос устарел. Повторите /search", show_alert=True)
             return
         
-        search_type = parts[1]  # "posts" или "web"
-        search_query = parts[2]
+        search_query = user_state.get('query')
+        
+        # Определяем тип поиска из callback_data
+        if data == "search_posts":
+            search_type = "posts"
+        elif data == "search_web":
+            search_type = "web"
+        elif data == "search_both":
+            search_type = "both"
+        else:
+            await query.answer("❌ Неверный тип поиска")
+            return
         
         db = SessionLocal()
         
@@ -1010,8 +1055,8 @@ class TelegramBot:
                 "/rag/hybrid_search",
                 user_id=db_user.id,
                 query=search_query,
-                include_web=(search_type == "web"),
-                include_posts=(search_type == "posts"),
+                include_web=(search_type in ["web", "both"]),
+                include_posts=(search_type in ["posts", "both"]),
                 limit=5
             )
             
@@ -1025,26 +1070,40 @@ class TelegramBot:
             # Форматируем ответ
             response_text = f"🔍 **Результаты:** {search_query}\n\n"
             
-            if search_type == "posts" and posts:
-                response_text += f"📱 **Посты ({len(posts)}):**\n"
-                for i, post in enumerate(posts, 1):
-                    channel = post.get("channel", "Неизвестный канал")
-                    snippet = post.get("snippet", post.get("text", ""))[:100]
-                    url = post.get("url", "#")
-                    response_text += f"{i}. [{channel}]({url})\n   {snippet}...\n\n"
-            elif search_type == "web" and web_results:
-                response_text += f"🌐 **Интернет ({len(web_results)}):**\n"
-                for i, web in enumerate(web_results, 1):
-                    title = web.get("title", "Без названия")
-                    url = web.get("url", "#")
-                    response_text += f"{i}. [{title}]({url})\n\n"
-            else:
-                response_text += "❌ Результаты не найдены"
+            if search_type == "posts" or search_type == "both":
+                if posts:
+                    response_text += f"📱 **Посты ({len(posts)}):**\n"
+                    for i, post in enumerate(posts[:3], 1):
+                        channel = post.get("channel", "Неизвестный канал")
+                        snippet = post.get("snippet", post.get("text", ""))[:100]
+                        url = post.get("url", "#")
+                        response_text += f"{i}. [{channel}]({url})\n   {snippet}...\n\n"
+                else:
+                    response_text += "📱 **Посты:** Не найдено\n\n"
             
-            # Кнопка возврата к полному поиску
-            keyboard = [[
-                InlineKeyboardButton("🔄 Полный поиск", callback_data=f"search_both_{search_query[:30]}")
-            ]]
+            if search_type == "web" or search_type == "both":
+                if web_results:
+                    response_text += f"🌐 **Интернет ({len(web_results)}):**\n"
+                    for i, web in enumerate(web_results[:3], 1):
+                        title = web.get("title", "Без названия")
+                        url = web.get("url", "#")
+                        response_text += f"{i}. [{title}]({url})\n\n"
+                else:
+                    response_text += "🌐 **Интернет:** Не найдено\n\n"
+            
+            # Кнопки для переключения режима (без текста запроса)
+            if search_type != "both":
+                keyboard = [[
+                    InlineKeyboardButton("🔄 Полный поиск", callback_data="search_both")
+                ]]
+            else:
+                keyboard = [
+                    [
+                        InlineKeyboardButton("📱 Только посты", callback_data="search_posts"),
+                        InlineKeyboardButton("🌐 Только веб", callback_data="search_web")
+                    ]
+                ]
+            
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await query.edit_message_text(
@@ -1091,7 +1150,8 @@ class TelegramBot:
                 )
                 return
             
-            settings = result.get("settings", {})
+            # API возвращает данные напрямую (не в "settings" ключе)
+            settings = result
             enabled = settings.get("enabled", False)
             frequency = settings.get("frequency", "daily")
             time_str = settings.get("time", "09:00")
@@ -1101,12 +1161,19 @@ class TelegramBot:
             
             # Форматируем текущие настройки
             freq_text = "📅 Ежедневно" if frequency == "daily" else "📅 Еженедельно"
-            ai_text = "🤖 Включена" if ai_summarize else "🤖 Отключена"
+            ai_text = "🤖 AI-суммаризация: Включена ✅" if ai_summarize else "🤖 AI-суммаризация: Отключена ⚪"
             style_map = {"concise": "Краткий", "detailed": "Детальный", "executive": "Executive"}
             style_text = f"📊 {style_map.get(summary_style, summary_style)}"
             topics_text = f"🏷️ Темы: {', '.join(preferred_topics)}" if preferred_topics else "🏷️ Темы: Не заданы"
             
             status_text = "✅ Включен" if enabled else "❌ Отключен"
+            
+            # Пояснение AI-суммаризации
+            ai_description = ""
+            if ai_summarize:
+                ai_description = "\n💡 AI создаст краткую выжимку вместо списка постов"
+            else:
+                ai_description = "\n💡 Дайджест будет содержать полные посты списком"
             
             message_text = f"""
 ⚙️ **Настройки дайджестов**
@@ -1114,7 +1181,7 @@ class TelegramBot:
 📊 **Статус:** {status_text}
 {freq_text}
 🕐 Время: {time_str}
-{ai_text}
+{ai_text}{ai_description}
 {style_text}
 {topics_text}
 
@@ -1122,10 +1189,12 @@ class TelegramBot:
             """
             
             # Создаем кнопки управления
+            ai_button_text = "🤖 AI-суммаризация: Выключить ❌" if ai_summarize else "🤖 AI-суммаризация: Включить ✅"
+            
             keyboard = [
                 [InlineKeyboardButton("📅 Изменить частоту", callback_data="digest_frequency")],
                 [InlineKeyboardButton("🕐 Изменить время", callback_data="digest_time")],
-                [InlineKeyboardButton("🤖 Переключить AI-суммаризацию", callback_data="digest_ai_toggle")],
+                [InlineKeyboardButton(ai_button_text, callback_data="digest_ai_toggle")],
                 [InlineKeyboardButton("📊 Стиль суммаризации", callback_data="digest_style")],
                 [InlineKeyboardButton("🏷️ Мои темы", callback_data="digest_topics")],
             ]
@@ -1171,7 +1240,8 @@ class TelegramBot:
                 await query.answer("❌ Ошибка получения настроек")
                 return
             
-            settings = result.get("settings", {})
+            # API возвращает данные напрямую (не в "settings" ключе)
+            settings = result
             
             # Обработка разных callback actions
             if data == "digest_frequency":
@@ -1193,6 +1263,7 @@ class TelegramBot:
                 # Обновляем настройки
                 update_result = await self._call_rag_service(
                     f"/rag/digest/settings/{db_user.id}",
+                    method="PUT",
                     enabled=settings.get("enabled", True),
                     frequency=frequency,
                     time=settings.get("time", "09:00"),
@@ -1228,6 +1299,7 @@ class TelegramBot:
                 # Обновляем настройки
                 update_result = await self._call_rag_service(
                     f"/rag/digest/settings/{db_user.id}",
+                    method="PUT",
                     enabled=settings.get("enabled", True),
                     frequency=settings.get("frequency", "daily"),
                     time=time_value,
@@ -1246,6 +1318,7 @@ class TelegramBot:
                 new_ai_state = not settings.get("ai_summarize", False)
                 update_result = await self._call_rag_service(
                     f"/rag/digest/settings/{db_user.id}",
+                    method="PUT",
                     enabled=settings.get("enabled", True),
                     frequency=settings.get("frequency", "daily"),
                     time=settings.get("time", "09:00"),
@@ -1254,8 +1327,10 @@ class TelegramBot:
                 )
                 
                 if update_result:
-                    status = "включена" if new_ai_state else "отключена"
-                    await query.answer(f"✅ AI-суммаризация {status}")
+                    if new_ai_state:
+                        await query.answer("✅ AI будет создавать краткую выжимку", show_alert=True)
+                    else:
+                        await query.answer("✅ Дайджест будет содержать полные посты", show_alert=True)
                     await self._show_digest_menu(query, db_user.id, edit=True)
                 else:
                     await query.answer("❌ Ошибка обновления")
@@ -1283,6 +1358,7 @@ class TelegramBot:
                 # Обновляем настройки
                 update_result = await self._call_rag_service(
                     f"/rag/digest/settings/{db_user.id}",
+                    method="PUT",
                     enabled=settings.get("enabled", True),
                     frequency=settings.get("frequency", "daily"),
                     time=settings.get("time", "09:00"),
@@ -1316,6 +1392,7 @@ class TelegramBot:
                 # Включаем дайджест
                 update_result = await self._call_rag_service(
                     f"/rag/digest/settings/{db_user.id}",
+                    method="PUT",
                     enabled=True,
                     frequency=settings.get("frequency", "daily"),
                     time=settings.get("time", "09:00"),
@@ -1333,6 +1410,7 @@ class TelegramBot:
                 # Отключаем дайджест
                 update_result = await self._call_rag_service(
                     f"/rag/digest/settings/{db_user.id}",
+                    method="PUT",
                     enabled=False,
                     frequency=settings.get("frequency", "daily"),
                     time=settings.get("time", "09:00"),
@@ -1372,7 +1450,8 @@ class TelegramBot:
                 await query_or_update.message.reply_text(message)
             return
         
-        settings = result.get("settings", {})
+        # API возвращает данные напрямую (не в "settings" ключе)
+        settings = result
         enabled = settings.get("enabled", False)
         frequency = settings.get("frequency", "daily")
         time_str = settings.get("time", "09:00")
@@ -1382,11 +1461,18 @@ class TelegramBot:
         
         # Форматируем текущие настройки
         freq_text = "📅 Ежедневно" if frequency == "daily" else "📅 Еженедельно"
-        ai_text = "🤖 Включена" if ai_summarize else "🤖 Отключена"
+        ai_text = "🤖 AI-суммаризация: Включена ✅" if ai_summarize else "🤖 AI-суммаризация: Отключена ⚪"
         style_map = {"concise": "Краткий", "detailed": "Детальный", "executive": "Executive"}
         style_text = f"📊 {style_map.get(summary_style, summary_style)}"
         topics_text = f"🏷️ Темы: {', '.join(preferred_topics)}" if preferred_topics else "🏷️ Темы: Не заданы"
         status_text = "✅ Включен" if enabled else "❌ Отключен"
+        
+        # Пояснение AI-суммаризации
+        ai_description = ""
+        if ai_summarize:
+            ai_description = "\n💡 AI создаст краткую выжимку вместо списка постов"
+        else:
+            ai_description = "\n💡 Дайджест будет содержать полные посты списком"
         
         message_text = f"""
 ⚙️ **Настройки дайджестов**
@@ -1394,7 +1480,7 @@ class TelegramBot:
 📊 **Статус:** {status_text}
 {freq_text}
 🕐 Время: {time_str}
-{ai_text}
+{ai_text}{ai_description}
 {style_text}
 {topics_text}
 
@@ -1402,10 +1488,12 @@ class TelegramBot:
         """
         
         # Кнопки
+        ai_button_text = "🤖 AI-суммаризация: Выключить ❌" if ai_summarize else "🤖 AI-суммаризация: Включить ✅"
+        
         keyboard = [
             [InlineKeyboardButton("📅 Изменить частоту", callback_data="digest_frequency")],
             [InlineKeyboardButton("🕐 Изменить время", callback_data="digest_time")],
-            [InlineKeyboardButton("🤖 Переключить AI-суммаризацию", callback_data="digest_ai_toggle")],
+            [InlineKeyboardButton(ai_button_text, callback_data="digest_ai_toggle")],
             [InlineKeyboardButton("📊 Стиль суммаризации", callback_data="digest_style")],
             [InlineKeyboardButton("🏷️ Мои темы", callback_data="digest_topics")],
         ]
@@ -1437,14 +1525,14 @@ class TelegramBot:
 
 🔐 **Команды аутентификации:**
 /auth - Безопасная аутентификация через веб-форму
-/auth_status - Проверить статус аутентификации
+/auth\\_status - Проверить статус аутентификации
 /logout - Выйти из системы
-/clear_auth - Очистить данные (при блокировке)
+/clear\\_auth - Очистить данные (при блокировке)
 
 📋 **Управление каналами:**
-/add_channel @channel_name - Добавить канал
-/my_channels - Список ваших каналов
-/remove_channel - Удалить канал
+/add\\_channel @channel\\_name - Добавить канал
+/my\\_channels - Список ваших каналов
+/remove\\_channel - Удалить канал
 
 🤖 **RAG & AI (новое):**
 /ask <вопрос> - Поиск ответа в постах
@@ -1460,16 +1548,16 @@ class TelegramBot:
 
 💡 **Как это работает:**
 1. Аутентификация: /auth
-2. Добавьте каналы: /add_channel
+2. Добавьте каналы: /add\\_channel
 3. Посты парсятся автоматически
 4. Используйте /ask для RAG-поиска
 5. Настройте дайджесты: /digest
 
-🔐 **Получение API_ID и API_HASH:**
+🔐 **Получение API ключей:**
 1. https://my.telegram.org
 2. Войдите в Telegram
 3. Создайте приложение
-4. Скопируйте API_ID и API_HASH
+4. Скопируйте API\\_ID и API\\_HASH
 
 ⚠️ **БЕЗОПАСНОСТЬ:**
 - Не вводите коды в чат!
@@ -1481,7 +1569,11 @@ class TelegramBot:
     def run(self):
         """Запуск бота"""
         print("🤖 Запуск Telegram бота...")
-        self.application.run_polling()
+        # Явно указываем, что хотим получать callback_query updates
+        self.application.run_polling(
+            allowed_updates=["message", "callback_query", "edited_message"]
+        )
+        logger.info("✅ Бот запущен с поддержкой: message, callback_query, edited_message")
 
 if __name__ == "__main__":
     from database import create_tables
