@@ -197,6 +197,57 @@ else
     read -p "OpenAI API Key: " OPENAI_API_KEY
 fi
 
+# Prompt for Telegram Bot Token (required for Telegram Parser)
+if [[ ! -v existing_env_vars[BOT_TOKEN] || -z "${existing_env_vars[BOT_TOKEN]}" ]]; then
+    echo ""
+    echo "Telegram Bot Token (required for Telegram Channel Parser service)."
+    echo "Get your token from @BotFather in Telegram: https://t.me/BotFather"
+    echo "If you don't have a token yet, you can skip this and add it later to .env file."
+fi
+
+if [[ -v existing_env_vars[BOT_TOKEN] && -n "${existing_env_vars[BOT_TOKEN]}" ]]; then
+    BOT_TOKEN="${existing_env_vars[BOT_TOKEN]}"
+else
+    echo ""
+    read -p "Telegram Bot Token: " BOT_TOKEN
+fi
+
+# Prompt for OpenRouter API Key (optional, for AI tagging)
+if [[ ! -v existing_env_vars[OPENROUTER_API_KEY] || -z "${existing_env_vars[OPENROUTER_API_KEY]}" ]]; then
+    echo ""
+    echo "OpenRouter API Key (optional, for AI tagging in Telegram Channel Parser)."
+    echo "Provides automatic post tagging using free AI models."
+    echo "You can skip this by leaving it empty."
+fi
+
+if [[ -v existing_env_vars[OPENROUTER_API_KEY] ]]; then
+    OPENROUTER_API_KEY="${existing_env_vars[OPENROUTER_API_KEY]}"
+    if [[ -z "$OPENROUTER_API_KEY" ]]; then
+        log_info "Found empty OpenRouter API Key in .env. You can provide one now or leave empty."
+        echo ""
+        read -p "OpenRouter API Key: " OPENROUTER_API_KEY
+    fi
+else
+    echo ""
+    read -p "OpenRouter API Key: " OPENROUTER_API_KEY
+fi
+
+# Prompt for GigaChat credentials (optional, for gpt2giga proxy)
+if [[ ! -v existing_env_vars[GIGACHAT_CREDENTIALS] || -z "${existing_env_vars[GIGACHAT_CREDENTIALS]}" ]]; then
+    echo ""
+    echo "GigaChat API Credentials (optional, for gpt2giga proxy service)."
+    echo "Provides OpenAI-compatible API for GigaChat (Sber)."
+    echo "Get your credentials at: https://developers.sber.ru/gigachat"
+    echo "You can skip this by leaving it empty."
+fi
+
+if [[ -v existing_env_vars[GIGACHAT_CREDENTIALS] && -n "${existing_env_vars[GIGACHAT_CREDENTIALS]}" ]]; then
+    GIGACHAT_CREDENTIALS="${existing_env_vars[GIGACHAT_CREDENTIALS]}"
+else
+    echo ""
+    read -p "GigaChat API Credentials: " GIGACHAT_CREDENTIALS
+fi
+
 # Logic for n8n workflow import (RUN_N8N_IMPORT)
 echo ""
 
@@ -369,6 +420,17 @@ generated_values["WEAVIATE_USERNAME"]="$USER_EMAIL" # Set Weaviate username for 
 if [[ -n "$OPENAI_API_KEY" ]]; then
     generated_values["OPENAI_API_KEY"]="$OPENAI_API_KEY"
 fi
+# Telegram Parser service variables
+if [[ -n "$BOT_TOKEN" ]]; then
+    generated_values["BOT_TOKEN"]="$BOT_TOKEN"
+fi
+if [[ -n "$OPENROUTER_API_KEY" ]]; then
+    generated_values["OPENROUTER_API_KEY"]="$OPENROUTER_API_KEY"
+fi
+# GigaChat proxy service variables
+if [[ -n "$GIGACHAT_CREDENTIALS" ]]; then
+    generated_values["GIGACHAT_CREDENTIALS"]="$GIGACHAT_CREDENTIALS"
+fi
 
 # Create a temporary file for processing
 TMP_ENV_FILE=$(mktemp)
@@ -388,6 +450,9 @@ found_vars["LANGFUSE_INIT_USER_EMAIL"]=0
 found_vars["N8N_WORKER_COUNT"]=0
 found_vars["WEAVIATE_USERNAME"]=0
 found_vars["NEO4J_AUTH_USERNAME"]=0
+found_vars["BOT_TOKEN"]=0
+found_vars["OPENROUTER_API_KEY"]=0
+found_vars["GIGACHAT_CREDENTIALS"]=0
 
 # Read template, substitute domain, generate initial values
 while IFS= read -r line || [[ -n "$line" ]]; do
@@ -434,7 +499,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
             # This 'else' block is for lines from template not covered by existing values or VARS_TO_GENERATE.
             # Check if it is one of the user input vars - these are handled by found_vars later if not in template.
             is_user_input_var=0 # Reset for each line
-            user_input_vars=("FLOWISE_USERNAME" "DASHBOARD_USERNAME" "LETSENCRYPT_EMAIL" "RUN_N8N_IMPORT" "PROMETHEUS_USERNAME" "SEARXNG_USERNAME" "OPENAI_API_KEY" "LANGFUSE_INIT_USER_EMAIL" "N8N_WORKER_COUNT" "WEAVIATE_USERNAME" "NEO4J_AUTH_USERNAME")
+            user_input_vars=("FLOWISE_USERNAME" "DASHBOARD_USERNAME" "LETSENCRYPT_EMAIL" "RUN_N8N_IMPORT" "PROMETHEUS_USERNAME" "SEARXNG_USERNAME" "OPENAI_API_KEY" "LANGFUSE_INIT_USER_EMAIL" "N8N_WORKER_COUNT" "WEAVIATE_USERNAME" "NEO4J_AUTH_USERNAME" "BOT_TOKEN" "OPENROUTER_API_KEY" "GIGACHAT_CREDENTIALS")
             for uivar in "${user_input_vars[@]}"; do
                 if [[ "$varName" == "$uivar" ]]; then
                     is_user_input_var=1
@@ -517,7 +582,7 @@ if [[ -z "${generated_values[SERVICE_ROLE_KEY]}" ]]; then
 fi
 
 # Add any custom variables that weren't found in the template
-for var in "FLOWISE_USERNAME" "DASHBOARD_USERNAME" "LETSENCRYPT_EMAIL" "RUN_N8N_IMPORT" "OPENAI_API_KEY" "PROMETHEUS_USERNAME" "SEARXNG_USERNAME" "LANGFUSE_INIT_USER_EMAIL" "N8N_WORKER_COUNT" "WEAVIATE_USERNAME" "NEO4J_AUTH_USERNAME"; do
+for var in "FLOWISE_USERNAME" "DASHBOARD_USERNAME" "LETSENCRYPT_EMAIL" "RUN_N8N_IMPORT" "OPENAI_API_KEY" "PROMETHEUS_USERNAME" "SEARXNG_USERNAME" "LANGFUSE_INIT_USER_EMAIL" "N8N_WORKER_COUNT" "WEAVIATE_USERNAME" "NEO4J_AUTH_USERNAME" "BOT_TOKEN" "OPENROUTER_API_KEY" "GIGACHAT_CREDENTIALS"; do
     if [[ ${found_vars["$var"]} -eq 0 && -v generated_values["$var"] ]]; then
         # Before appending, check if it's already in TMP_ENV_FILE to avoid duplicates
         if ! grep -q -E "^${var}=" "$TMP_ENV_FILE"; then

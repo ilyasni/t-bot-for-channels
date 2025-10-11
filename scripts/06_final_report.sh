@@ -181,6 +181,29 @@ if is_profile_active "neo4j"; then
   echo "  Authorization Header Value (for 'Authorization: Basic <value>'): \$(echo -n \"${NEO4J_AUTH_USERNAME:-neo4j}:${NEO4J_AUTH_PASSWORD}\" | base64)"
 fi
 
+# Telegram Channel Parser (always active via docker-compose.override.yml)
+echo
+echo "==================== Telegram Channel Parser ====================="
+echo
+echo "API Endpoint: http://localhost:8010 (internal)"
+echo "Auth Web Server: http://localhost:8001 (internal)"
+echo "External Auth URL: https://${TELEGRAM_AUTH_HOSTNAME:-telegram-auth.yourdomain.com}"
+echo "Bot Token: ${BOT_TOKEN:-<not_set_in_env>}"
+echo "Database: ${TELEGRAM_DATABASE_URL:-sqlite:///./telethon/data/telethon_bot.db}"
+echo "OpenRouter API Key: ${OPENROUTER_API_KEY:-<not_set_for_ai_tagging>}"
+echo
+echo "Documentation: ./telethon/docs/README.md"
+echo "Quick Start Guide: ./telethon/docs/quickstart/QUICK_START.md"
+echo "(Note: Use your Telegram bot to add channels and manage settings)"
+
+echo
+echo "==================== GPT2Giga Proxy =============================="
+echo
+echo "Proxy Endpoint: http://localhost:8090 (internal)"
+echo "GigaChat Credentials: ${GIGACHAT_CREDENTIALS:-<not_set_in_env>}"
+echo "Get credentials at: https://developers.sber.ru/gigachat"
+echo "(Note: Provides OpenAI-compatible API for GigaChat)"
+
 # Standalone PostgreSQL (used by n8n, Langfuse, etc.)
 # Check if n8n or langfuse is active, as they use this PostgreSQL instance.
 # The Supabase section already details its own internal Postgres.

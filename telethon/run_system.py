@@ -140,4 +140,15 @@ if __name__ == "__main__":
     print("📱 Парсинг работает с персональными клиентами пользователей")
     print("=" * 70)
     
-    asyncio.run(main()) 
+    try:
+        # Проверяем, есть ли уже запущенный event loop
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            # Если event loop уже запущен, создаем задачу
+            asyncio.create_task(main())
+        else:
+            # Если event loop не запущен, используем asyncio.run()
+            asyncio.run(main())
+    except RuntimeError:
+        # Если не можем получить event loop, создаем новый
+        asyncio.run(main()) 

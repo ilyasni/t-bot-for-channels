@@ -44,6 +44,38 @@ def run_command(cmd, cwd=None):
     print("Running:", " ".join(cmd))
     subprocess.run(cmd, cwd=cwd, check=True)
 
+def prepare_telethon_directories():
+    """Create necessary directories for telethon service."""
+    print("Preparing Telegram Parser (telethon) directories...")
+    dirs = [
+        "telethon/sessions",
+        "telethon/data",
+        "telethon/logs"
+    ]
+    for dir_path in dirs:
+        if not os.path.exists(dir_path):
+            os.makedirs(dir_path, exist_ok=True)
+            print(f"✓ Created directory: {dir_path}")
+        else:
+            print(f"✓ Directory already exists: {dir_path}")
+
+def prepare_service_env_files():
+    """Copy .env.example to .env for services if not exists."""
+    print("Preparing service environment files...")
+    services_with_env = {
+        "telethon": "telethon/.env.example",
+        "gpt2giga": "gpt2giga/.env.example"
+    }
+    for service, example_path in services_with_env.items():
+        env_path = example_path.replace(".env.example", ".env")
+        if not os.path.exists(env_path) and os.path.exists(example_path):
+            shutil.copyfile(example_path, env_path)
+            print(f"✓ Created {env_path} from {example_path}")
+        elif os.path.exists(env_path):
+            print(f"✓ {env_path} already exists")
+        else:
+            print(f"⚠ Warning: {example_path} not found for {service}")
+
 def clone_supabase_repo():
     """Clone the Supabase repository using sparse checkout if not already present."""
     if not is_supabase_enabled():
@@ -114,12 +146,25 @@ def start_local_ai():
 
     # Explicitly build services and pull newer base images first.
     print("Checking for newer base images and building services...")
-    build_cmd = ["docker", "compose", "-p", "localai", "-f", "docker-compose.yml", "build", "--pull"]
+    build_cmd = ["docker", "compose", "-p", "localai", "-f", "docker-compose.yml"]
+    
+    # Add override file if it exists
+    override_path = "docker-compose.override.yml"
+    if os.path.exists(override_path):
+        print("✓ Found docker-compose.override.yml, including additional services (telethon, gpt2giga)...")
+        build_cmd.extend(["-f", override_path])
+    
+    build_cmd.extend(["build", "--pull"])
     run_command(build_cmd)
 
     # Now, start the services using the newly built images. No --build needed as we just built.
     print("Starting containers...")
-    up_cmd = ["docker", "compose", "-p", "localai", "-f", "docker-compose.yml", "up", "-d"]
+    up_cmd = ["docker", "compose", "-p", "localai", "-f", "docker-compose.yml"]
+    
+    if os.path.exists(override_path):
+        up_cmd.extend(["-f", override_path])
+    
+    up_cmd.extend(["up", "-d"])
     run_command(up_cmd)
 
 def generate_searxng_secret_key():
@@ -267,6 +312,10 @@ def main():
     if is_supabase_enabled():
         clone_supabase_repo()
         prepare_supabase_env()
+    
+    # Prepare directories and environment files for additional services
+    prepare_telethon_directories()
+    prepare_service_env_files()
     
     # Generate SearXNG secret key and check docker-compose.yml
     generate_searxng_secret_key()

@@ -19,10 +19,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Создание необходимых директорий
-RUN mkdir -p sessions logs
-
-# Установка прав на выполнение скриптов
-RUN chmod +x setup.py
+RUN mkdir -p sessions logs data
 
 # Переменные окружения по умолчанию
 ENV HOST=0.0.0.0
