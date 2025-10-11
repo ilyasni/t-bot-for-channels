@@ -46,22 +46,119 @@ Telegram Channel Parser Bot - система для парсинга Telegram к
 
 ```
 telethon/
-├── docs/                      # Вся документация
-│   ├── quickstart/           # Быстрые старты
-│   ├── features/             # Документация функций
-│   ├── migrations/           # Руководства по миграциям
-│   └── troubleshooting/      # Решение проблем
-├── scripts/                   # Скрипты
+├── README.md                  # Главная документация ← ЕДИНСТВЕННЫЙ MD в корне
+├── TESTING_GUIDE.md           # Руководство по тестированию RAG команд
+├── QUICK_REFERENCE.md         # Шпаргалка по командам бота
+│
+├── docs/                      # 📚 Вся документация
+│   ├── README.md             # Навигация по документации
+│   ├── quickstart/           # Быстрые старты (6 файлов)
+│   │   ├── QUICK_START.md
+│   │   ├── RAG_QUICKSTART.md
+│   │   └── RAG_SYSTEM_READY.md
+│   ├── features/             # Документация функций (18 файлов)
+│   │   ├── rag/              # RAG система (10 файлов)
+│   │   │   ├── README.md
+│   │   │   ├── BOT_RAG_COMMANDS.md
+│   │   │   ├── AI_DIGEST_GUIDE.md
+│   │   │   └── ...
+│   │   ├── TAGGING_README.md
+│   │   ├── RETENTION_README.md
+│   │   └── README_SECURE.md
+│   ├── migrations/           # Руководства по миграциям (4 файла)
+│   ├── troubleshooting/      # Решение проблем (6 файлов)
+│   └── archive/              # Архив (22 файла) ← НОВОЕ
+│       ├── README.md
+│       ├── reports/          # Отчеты о разработке (8 файлов)
+│       ├── testing/          # Тестовые отчеты (4 файла)
+│       └── [changelogs, updates, fixes]
+│
+├── rag_service/              # 🤖 RAG микросервис (14 файлов)
+│   ├── main.py               # FastAPI приложение (20+ endpoints)
+│   ├── vector_db.py          # Qdrant клиент
+│   ├── embeddings.py         # Генерация embeddings (GigaChat)
+│   ├── indexer.py            # Индексирование постов
+│   ├── search.py             # Гибридный поиск
+│   ├── generator.py          # RAG-генерация ответов
+│   ├── digest_generator.py   # Обычные дайджесты
+│   ├── ai_digest_generator.py # AI-дайджесты с персонализацией
+│   ├── scheduler.py          # Планировщик задач
+│   ├── schemas.py            # Pydantic модели API
+│   ├── config.py             # Конфигурация RAG
+│   ├── requirements.txt      # Зависимости (minimal, без torch)
+│   ├── Dockerfile.rag        # Docker образ
+│   └── README.md             # Документация сервиса
+│
+├── scripts/                   # 🔧 Скрипты
 │   ├── setup/                # Настройка системы
-│   ├── migrations/           # Миграции БД
-│   └── utils/                # Утилиты
-├── tests/                     # Тесты
-├── examples/                  # Примеры (n8n workflows)
-├── sessions/                  # Сессии Telegram (gitignored)
-├── data/                      # База данных SQLite
-├── logs/                      # Логи приложения
-└── [основные .py файлы]      # Код приложения
+│   ├── migrations/           # Миграции БД (15+ скриптов)
+│   │   ├── add_rag_tables.py
+│   │   ├── add_enriched_content.py
+│   │   └── ...
+│   └── utils/                # Утилиты разработки
+│       └── dev.sh            # Helper скрипт для разработки
+│
+├── tests/                     # 🧪 Тесты (pytest)
+├── examples/                  # 📝 Примеры (n8n workflows)
+├── sessions/                  # 🔐 Сессии Telegram (gitignored)
+├── data/                      # 💾 База данных SQLite
+├── logs/                      # 📋 Логи приложения
+└── [основные .py файлы]      # 🐍 Код приложения (20+ файлов)
 ```
+
+## 🏗️ Микросервисная архитектура
+
+Система состоит из нескольких микросервисов:
+
+### Основные микросервисы
+
+1. **telethon** (порт 8010, 8001)
+   - Парсинг Telegram каналов
+   - REST API для интеграции
+   - Web-аутентификация пользователей
+   - Управление подписками
+
+2. **telethon-bot** (standalone)
+   - Telegram бот для управления каналами
+   - Команды: /start, /add_channel, /list_channels, /settings
+   - Персональные настройки пользователя
+
+3. **rag-service** (порт 8020)
+   - Векторный поиск по постам (Qdrant)
+   - RAG-генерация ответов на вопросы
+   - AI-дайджесты с персонализацией
+   - 20+ API endpoints
+
+4. **gpt2giga-proxy** (порт 8090)
+   - OpenAI-совместимый прокси для GigaChat
+   - Embeddings генерация (EmbeddingsGigaR)
+   - Поддержка моделей: GigaChat-Lite, GigaChat, GigaChatMAX
+
+### Event-Driven Architecture
+
+```
+Telegram → Parser → New Post Event
+                         ↓
+              ┌──────────┼──────────┐
+              ↓          ↓          ↓
+         Tagging    Indexer     n8n Webhook
+         Service    (RAG)       (опционально)
+              ↓          ↓          
+         AI Tags    Qdrant     Flowise
+                    Vector      Workflow
+                         ↓
+                    RAG Ready
+                         ↓
+              User Query → Answer
+```
+
+### Взаимодействие сервисов
+
+- **Parser → RAG:** Автоматическая индексация новых постов
+- **Tagging → Posts:** Добавление AI-тегов
+- **RAG → Qdrant:** Векторное хранилище
+- **RAG → Redis:** Кеширование embeddings
+- **RAG → n8n:** Webhooks для workflow автоматизации
 
 ## 🐍 Основные компоненты
 
@@ -80,6 +177,19 @@ telethon/
 - `crypto_utils.py` - Шифрование данных
 - `run_system.py` - Запуск всей системы локально
 
+### RAG Service компоненты (микросервис)
+- `rag_service/main.py` - FastAPI сервер (порт 8020)
+- `rag_service/vector_db.py` - Qdrant клиент
+- `rag_service/embeddings.py` - Генерация embeddings (GigaChat + fallback)
+- `rag_service/indexer.py` - Индексирование постов
+- `rag_service/search.py` - Гибридный поиск (vector + keyword)
+- `rag_service/generator.py` - RAG-генерация ответов
+- `rag_service/digest_generator.py` - Генерация дайджестов
+- `rag_service/ai_digest_generator.py` - AI-суммаризация дайджестов
+- `rag_service/scheduler.py` - Планировщик задач
+- `rag_service/schemas.py` - Pydantic модели
+- `rag_service/config.py` - Конфигурация RAG
+
 ## 🎯 Правила разработки
 
 ### 1. Структура кода
@@ -88,13 +198,17 @@ telethon/
 - Основные .py файлы держите в корне `telethon/`
 - Скрипты размещайте в `scripts/{setup|migrations|utils}/`
 - Документацию в `docs/{quickstart|features|migrations|troubleshooting}/`
+- Временные отчеты и старые документы в `docs/archive/{reports|testing}/`
 - Тесты в `tests/`
 - Примеры в `examples/`
+- В корне telethon/ только 3 MD файла: README.md, TESTING_GUIDE.md, QUICK_REFERENCE.md
 
 **Никогда:**
 - НЕ создавайте standalone docker-compose.yml (есть корневой docker-compose.override.yml)
-- НЕ дублируйте документацию в корне папки
-- НЕ размещайте скрипты в корне
+- НЕ создавайте MD файлы в корне telethon/ (используйте docs/)
+- НЕ дублируйте документацию в нескольких местах
+- НЕ размещайте скрипты в корне (только в scripts/)
+- НЕ размещайте отчеты о разработке в docs/features/ (используйте docs/archive/reports/)
 
 ### 2. База данных
 
@@ -117,10 +231,31 @@ class User(Base):
 - SQLite (по умолчанию): `sqlite:///./data/telethon_bot.db`
 - PostgreSQL/Supabase: через `DATABASE_URL` из корневого .env
 
+**Основные таблицы:**
+- `users` - пользователи системы
+- `channels` - Telegram каналы
+- `posts` - спарсенные посты
+- `user_channel` - many-to-many связь пользователей и каналов
+
+**RAG System таблицы:**
+- `digest_settings` - настройки AI-дайджестов пользователей
+  - `enabled`, `frequency` (daily/weekly), `time`, `days_of_week`
+  - `channels`, `tags` (фильтрация контента)
+  - `format` (markdown/html/plain), `max_posts`
+  - `delivery_method` (telegram/email)
+  - `ai_summarize`, `preferred_topics`, `summary_style`
+- `indexing_status` - статус индексации постов в Qdrant
+  - `user_id`, `post_id`, `vector_id`
+  - `status` (success/failed/pending), `error`
+- `rag_query_history` - история RAG-запросов для анализа интересов
+  - `user_id`, `query`, `created_at`
+  - `extracted_topics` (JSON с ключевыми словами)
+
 **Миграции:**
 - Скрипты миграций → `scripts/migrations/`
 - Документация → `docs/migrations/`
 - Всегда тестируйте на SQLite и PostgreSQL
+- RAG миграция: `scripts/migrations/add_rag_tables.py`
 
 ### 3. API Endpoints (FastAPI)
 
@@ -168,6 +303,12 @@ async def start_handler(event):
 - `/remove_channel` - удалить канал
 - `/settings` - настройки пользователя
 
+**Новые команды (RAG System):**
+- `/ask <вопрос>` - поиск ответа в постах с RAG
+- `/digest` - настройка AI-дайджестов
+- `/recommend` - персональные рекомендации на основе интересов
+- `/search <запрос>` - гибридный поиск (посты + веб через Searxng)
+
 ### 5. Parser Service (`parser_service.py`)
 
 **Правила парсинга:**
@@ -212,7 +353,389 @@ async def cleanup_old_posts():
     pass
 ```
 
-### 8. Безопасность
+### 8. RAG System (`rag_service/`)
+
+**Микросервис для векторного поиска и генерации ответов**
+
+#### Архитектура RAG
+
+```python
+# 1. Индексирование (автоматическое после парсинга)
+Post → Embedding (GigaChat) → Qdrant Vector → Indexed
+     ↓ (кеш)
+   Redis (24h TTL)
+
+# 2. Поиск и генерация
+User Query → Embedding → Qdrant Search → Top K Results
+                                              ↓
+                                    Context + Query → LLM → Answer
+```
+
+#### Компоненты RAG Service
+
+**`vector_db.py` - Qdrant интеграция:**
+```python
+from qdrant_client import QdrantClient
+
+# Создание клиента
+qdrant_client = QdrantClient(
+    url=os.getenv("QDRANT_URL", "http://qdrant:6333"),
+    api_key=os.getenv("QDRANT_API_KEY")
+)
+
+# Создание коллекции для пользователя
+collection_name = f"user_{user_id}_posts"
+qdrant_client.create_collection(
+    collection_name=collection_name,
+    vectors_config=VectorParams(size=1536, distance=Distance.COSINE)
+)
+
+# Hybrid search (vector + metadata filters)
+results = qdrant_client.search(
+    collection_name=collection_name,
+    query_vector=embedding,
+    query_filter=Filter(
+        must=[
+            FieldCondition(key="channel_id", match=MatchValue(value=channel_id)),
+            FieldCondition(key="tags", match=MatchAny(any=["технологии"]))
+        ]
+    ),
+    limit=10,
+    score_threshold=0.7
+)
+```
+
+**Best practice:**
+- Отдельная коллекция для каждого пользователя
+- Metadata: `channel_id`, `tags`, `posted_at`, `url`
+- Score threshold: 0.7 (минимальная релевантность)
+- Top K: 10 документов для контекста
+
+**`embeddings.py` - Генерация embeddings:**
+```python
+# GigaChat - основной провайдер (EmbeddingsGigaR)
+async def generate_embedding_gigachat(text: str) -> List[float]:
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"{GIGACHAT_PROXY_URL}/v1/embeddings",
+            json={
+                "model": "EmbeddingsGigaR",
+                "input": text
+            }
+        )
+        return response.json()["data"][0]["embedding"]
+
+# Redis кеширование
+cache_key = f"embedding:{hashlib.md5(text.encode()).hexdigest()}"
+if cached := redis_client.get(cache_key):
+    return json.loads(cached)
+else:
+    embedding = await generate_embedding(text)
+    redis_client.setex(cache_key, 86400, json.dumps(embedding))  # 24h TTL
+```
+
+**Best practice:**
+- Кеширование в Redis с TTL 24 часа
+- Chunking для длинных текстов (max 1536 tokens)
+- Fallback на OpenAI embeddings при ошибках GigaChat
+
+**`search.py` - Гибридный поиск:**
+```python
+async def hybrid_search(
+    user_id: int,
+    query: str,
+    filters: Optional[Dict] = None,
+    top_k: int = 10
+) -> List[SearchResult]:
+    # 1. Векторный поиск
+    query_embedding = await embeddings_service.generate(query)
+    vector_results = await qdrant_search(user_id, query_embedding, top_k)
+    
+    # 2. Keyword search (опционально)
+    if include_keywords:
+        keyword_results = await keyword_search(user_id, query)
+        results = merge_results(vector_results, keyword_results)
+    
+    # 3. Re-ranking (по score)
+    ranked_results = sorted(results, key=lambda x: x.score, reverse=True)
+    
+    return ranked_results[:top_k]
+```
+
+**`generator.py` - RAG-генерация:**
+```python
+async def generate_answer(
+    user_id: int,
+    query: str,
+    context: List[Post]
+) -> str:
+    # Формируем контекст из найденных постов
+    context_text = "\n\n".join([
+        f"[{post.channel.channel_username}] {post.text}"
+        for post in context
+    ])
+    
+    # Prompt для LLM
+    prompt = f"""На основе следующего контекста ответь на вопрос пользователя.
+
+Контекст:
+{context_text}
+
+Вопрос: {query}
+
+Ответ:"""
+    
+    # Генерация через OpenRouter/GigaChat
+    answer = await llm_generate(prompt, max_tokens=500, temperature=0.3)
+    return answer
+```
+
+**`digest_generator.py` - AI-дайджесты:**
+```python
+async def generate_ai_digest(user_id: int, settings: DigestSettings):
+    # 1. Анализ истории запросов пользователя
+    query_history = db.query(RAGQueryHistory).filter(
+        RAGQueryHistory.user_id == user_id,
+        RAGQueryHistory.created_at >= datetime.now() - timedelta(days=30)
+    ).all()
+    
+    interests = extract_topics_from_history(query_history)
+    
+    # 2. Сбор релевантных постов
+    relevant_posts = []
+    for topic in interests[:settings.topics_limit]:
+        posts = await search_posts_by_topic(user_id, topic, limit=10)
+        relevant_posts.extend(posts)
+    
+    # 3. AI-суммаризация
+    summary = await summarize_posts(
+        posts=relevant_posts,
+        style=settings.summary_style,  # concise/detailed/executive
+        topics=settings.preferred_topics
+    )
+    
+    return summary
+```
+
+#### RAG API Endpoints
+
+**Основные endpoints:**
+- `POST /rag/index/post/{post_id}` - индексировать пост
+- `POST /rag/index/batch` - batch индексация
+- `GET /rag/index/status/{user_id}` - статус индексации
+- `POST /rag/query` - RAG-запрос
+- `POST /rag/search` - векторный поиск
+- `GET /rag/recommend/{user_id}` - рекомендации
+- `POST /rag/digest/settings/{user_id}` - настройки дайджестов
+- `POST /rag/digest/generate/{user_id}` - генерация дайджеста
+- `GET /rag/health` - healthcheck
+
+**Пример использования:**
+```python
+# Из Telegram бота - команда /ask
+async with httpx.AsyncClient() as client:
+    response = await client.post(
+        "http://rag-service:8020/rag/query",
+        json={
+            "user_id": user_id,
+            "query": "расскажи о последних новостях AI",
+            "top_k": 5,
+            "min_score": 0.7
+        }
+    )
+    result = response.json()
+    answer = result["answer"]
+    sources = result["sources"]  # List[Post] для ссылок
+```
+
+### 9. Интеграция внешних сервисов
+
+#### Qdrant (Векторная БД)
+
+**Подключение:**
+- Internal: `http://qdrant:6333`
+- External: `https://qdrant.produman.studio`
+- API Key: из `.env` (`QDRANT_API_KEY`)
+
+**Best practices:**
+- Изоляция по пользователям (отдельные коллекции)
+- Metadata для фильтрации и гибридного поиска
+- Batch operations для индексации (до 100 постов)
+
+#### Redis/Valkey (Кеширование)
+
+**Подключение:**
+- Host: `redis:6379`
+- Password: `LOCALONLYREDIS`
+
+**Use cases:**
+```python
+import redis
+redis_client = redis.Redis(host='redis', port=6379, password='LOCALONLYREDIS')
+
+# Кеш embeddings (дорогая операция)
+redis_client.setex(f"embedding:{text_hash}", 86400, embedding_json)
+
+# Кеш RAG-ответов
+redis_client.setex(f"rag:{user_id}:{query_hash}", 3600, answer_json)
+
+# Rate limiting
+redis_client.incr(f"rate:{user_id}:{endpoint}", ex=60)
+```
+
+**TTL политика:**
+- Embeddings: 24 часа
+- RAG ответы: 1 час
+- Rate limit: 1 минута
+
+#### Searxng (Метапоисковик)
+
+**Подключение:**
+- URL: `https://searxng.produman.studio`
+- Auth: Basic (username/password из .env)
+
+**Интеграция в RAG:**
+```python
+async def enhance_rag_with_web(query: str) -> List[str]:
+    auth = httpx.BasicAuth(
+        os.getenv("SEARXNG_USER"),
+        os.getenv("SEARXNG_PASSWORD")
+    )
+    
+    async with httpx.AsyncClient(auth=auth, timeout=10.0) as client:
+        response = await client.get(
+            f"{SEARXNG_URL}/search",
+            params={
+                "q": query,
+                "format": "json",
+                "categories": "general",
+                "engines": "google,bing,duckduckgo"
+            }
+        )
+        results = response.json()["results"][:5]
+        return [r["content"] for r in results if r.get("content")]
+```
+
+**Best practice:**
+- Использовать только для расширения RAG контекста
+- Лимит 5 результатов
+- Комбинировать с векторным поиском постов
+
+#### Crawl4AI (Веб-скрапинг)
+
+**Подключение:**
+- Internal: `http://crawl4ai:11235`
+
+**Обогащение постов ссылками:**
+```python
+async def enrich_post_with_links(post: Post):
+    """Автоматическое извлечение контента из ссылок"""
+    urls = extract_urls(post.text)
+    
+    if not urls:
+        return
+    
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(
+            "http://crawl4ai:11235/crawl",
+            json={
+                "url": urls[0],
+                "word_count_threshold": 100
+            }
+        )
+        content = response.json()["markdown"]
+    
+    # Добавляем к тексту для индексации
+    post.enriched_content = f"{post.text}\n\n{content}"
+    await rag_service.reindex_post(post.id)
+```
+
+**Best practice:**
+- Batch extraction (до 10 ссылок)
+- Timeout 30 секунд
+- Кеширование в Redis
+- Retry для 5xx ошибок
+
+#### Ollama (Локальные LLM)
+
+**Подключение:**
+- Internal: `http://ollama:11434`
+- Модели: llama3.2, mistral, etc.
+
+**Use case - приватная обработка:**
+```python
+async def anonymize_with_ollama(text: str) -> str:
+    """Локальная обработка без отправки в облако"""
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        response = await client.post(
+            "http://ollama:11434/api/generate",
+            json={
+                "model": "llama3.2",
+                "prompt": f"Удали персональные данные:\n\n{text}",
+                "stream": False
+            }
+        )
+        return response.json()["response"]
+```
+
+**Best practice:**
+- Использовать для чувствительных данных
+- Timeout 60 секунд (LLM медленнее API)
+- Fallback на облачные API для критичных задач
+
+#### n8n и Flowise (Автоматизация)
+
+**Webhooks для событий:**
+```python
+# В parser_service.py после парсинга
+async def notify_webhooks(event: str, data: dict):
+    webhook_url = os.getenv(f"WEBHOOK_{event.upper()}")
+    
+    if webhook_url:
+        async with httpx.AsyncClient() as client:
+            await client.post(
+                webhook_url,
+                json={
+                    "event": event,
+                    "timestamp": datetime.now().isoformat(),
+                    "data": data
+                }
+            )
+
+# События:
+# - new_post: новый пост добавлен
+# - post_tagged: пост получил AI-теги
+# - post_indexed: пост индексирован в Qdrant
+# - digest_sent: дайджест отправлен пользователю
+```
+
+**Endpoint для n8n интеграции:**
+```python
+@app.get("/users/{user_id}/posts/recent")
+async def get_recent_posts_for_n8n(
+    user_id: int,
+    hours: int = 24,
+    include_embeddings: bool = False
+):
+    """Rich payload для n8n/Flowise workflows"""
+    posts = db.query(Post).filter(
+        Post.user_id == user_id,
+        Post.posted_at >= datetime.now() - timedelta(hours=hours)
+    ).all()
+    
+    return [{
+        "id": p.id,
+        "text": p.text,
+        "tags": p.tags,
+        "channel": p.channel.channel_username,
+        "url": p.url,
+        "posted_at": p.posted_at.isoformat(),
+        "indexed": get_indexing_status(p.id),
+        "embedding": get_embedding(p.id) if include_embeddings else None
+    } for p in posts]
+```
+
+### 10. Безопасность
 
 **Шифрование (`crypto_utils.py`):**
 - Используем Fernet для шифрования API ключей
@@ -682,19 +1205,148 @@ telethon-shell
 
 ## 🎯 Performance
 
-### Оптимизация
-- Используйте bulk_insert для постов
-- Индексы на внешние ключи
-- Connection pooling для БД
-- Кэширование частых запросов
-- Batch processing для тегирования
+### Оптимизация базы данных
+- **Bulk operations:** Используйте bulk_insert для постов
+- **Индексы:** На все внешние ключи (user_id, channel_id, post_id)
+- **Connection pooling:** PostgreSQL через Supavisor (db:6543)
+  ```python
+  # Рекомендуемые настройки для pooler
+  DATABASE_URL = "postgresql://postgres:password@db:6543/postgres"
+  pool_size = 20  # Для production
+  max_overflow = 10
+  ```
 
-### Limits
+### Кеширование (Redis)
 ```python
+import redis
+redis_client = redis.Redis(host='redis', port=6379, password='LOCALONLYREDIS')
+
+# Embeddings (дорогая операция)
+EMBEDDING_TTL = 86400  # 24 hours
+redis_client.setex(f"embedding:{text_hash}", EMBEDDING_TTL, embedding_json)
+
+# RAG ответы
+RAG_QUERY_TTL = 3600  # 1 hour
+redis_client.setex(f"rag:{user_id}:{query_hash}", RAG_QUERY_TTL, answer)
+
+# Rate limiting
+redis_client.incr(f"rate:{user_id}:{endpoint}", ex=60)
+```
+
+**Кеш инвалидация:**
+- При обновлении поста → удалить `embedding:{post_hash}`
+- При изменении подписок → удалить `rag:*` для пользователя
+- Rate limit reset: каждую минуту
+
+### Batch processing
+```python
+# Парсинг: до 50 постов за запрос
+MAX_POSTS_PER_CHANNEL = 50
+
+# Тегирование: пакеты по 10 постов
+TAGGING_BATCH_SIZE = 10
+async def process_batch(post_ids: List[int]):
+    for batch in chunks(post_ids, 10):
+        await tagging_service.process_posts_batch(batch)
+        await asyncio.sleep(1.0)  # Rate limiting
+
+# Индексирование: до 100 постов в Qdrant
+INDEXING_BATCH_SIZE = 100
+await qdrant_client.upsert(
+    collection_name=collection,
+    points=batch_of_100_points
+)
+```
+
+### Async everywhere
+```python
+# ✅ Правильно: async HTTP requests
+async with httpx.AsyncClient() as client:
+    response = await client.get(url)
+
+# ❌ Неправильно: синхронные requests блокируют event loop
+response = requests.get(url)  # Блокирует!
+
+# ✅ Правильно: concurrent requests
+tasks = [fetch_url(url) for url in urls]
+results = await asyncio.gather(*tasks)
+
+# ✅ Правильно: background tasks в FastAPI
+@app.post("/index")
+async def index_post(post_id: int, background_tasks: BackgroundTasks):
+    background_tasks.add_task(indexer_service.index_post, post_id)
+    return {"status": "queued"}
+```
+
+### Lazy loading
+```python
+# Векторы Qdrant: загружаем только при необходимости
+results = qdrant_client.search(
+    collection_name=collection,
+    query_vector=embedding,
+    with_payload=True,  # Metadata
+    with_vectors=False  # Векторы не нужны для отображения
+)
+
+# SQLAlchemy: используйте lazy loading для relationships
+class Post(Base):
+    channel = relationship("Channel", lazy="select")  # Загружаем при обращении
+```
+
+### Limits и Rate Limiting
+```python
+# Парсинг
 MAX_POSTS_PER_CHANNEL = 50      # За один парсинг
 PARSER_INTERVAL_MINUTES = 30    # Минимальный интервал
-TAGGING_BATCH_SIZE = 10         # Постов за раз для AI
 MAX_CHANNELS_PER_USER = 100     # Ограничение каналов
+
+# Тегирование
+TAGGING_BATCH_SIZE = 10         # Постов за раз для AI
+TAGGING_MAX_RETRIES = 3         # Попытки при ошибках
+TAGGING_RETRY_DELAY = 2.0       # Задержка между retry (секунды)
+
+# RAG
+RAG_TOP_K = 10                  # Документов для контекста
+RAG_MAX_CONTEXT_TOKENS = 4000   # Максимум tokens в контексте
+RAG_QUERY_RATE_LIMIT = 10       # Запросов в минуту на пользователя
+
+# Индексирование
+INDEXING_BATCH_SIZE = 100       # Постов за раз в Qdrant
+INDEXING_CONCURRENT_LIMIT = 5   # Одновременных операций
+
+# Rate limiting через Redis
+@app.post("/rag/query")
+async def query_endpoint(user_id: int):
+    key = f"rate:rag:query:{user_id}"
+    current = redis_client.incr(key)
+    
+    if current == 1:
+        redis_client.expire(key, 60)  # TTL 1 минута
+    
+    if current > RAG_QUERY_RATE_LIMIT:
+        raise HTTPException(429, "Rate limit exceeded")
+```
+
+### Мониторинг производительности
+```python
+from prometheus_client import Counter, Histogram, Gauge
+
+# Метрики
+parsing_duration = Histogram('parsing_duration_seconds', 'Channel parsing duration')
+rag_query_duration = Histogram('rag_query_duration_seconds', 'RAG query duration')
+embeddings_cache_hits = Counter('embeddings_cache_hits_total', 'Cache hits')
+embeddings_cache_misses = Counter('embeddings_cache_misses_total', 'Cache misses')
+indexing_queue_size = Gauge('indexing_queue_size', 'Posts waiting for indexing')
+
+# Использование
+with parsing_duration.time():
+    await parse_channel(channel_id, user_id)
+
+# Cache hit rate tracking
+if cached_embedding:
+    embeddings_cache_hits.inc()
+else:
+    embeddings_cache_misses.inc()
 ```
 
 ## 🗄️ Supabase интеграция
@@ -1053,20 +1705,444 @@ docker compose -p localai restart studio
 
 ## ✨ Best Practices
 
-1. **Код:** Чистый, читаемый, с комментариями на русском
-2. **Типизация:** Используйте type hints везде
-3. **Async:** Все I/O операции асинхронные
-4. **Errors:** Обрабатывайте исключения, логируйте
-5. **Security:** Шифруйте credentials, валидируйте input
-6. **Testing:** Покрытие >80%, тестируйте edge cases
-7. **Docs:** Обновляйте при каждом изменении API
-8. **Git:** Осмысленные коммиты, не коммитьте .env
+### 1. Код и архитектура
+
+**Чистый код:**
+- Код на русском в комментариях, на английском в идентификаторах
+- Type hints везде (Python 3.10+)
+- Docstrings для всех публичных функций
+- Короткие функции (до 50 строк)
+
+```python
+async def generate_answer(
+    user_id: int,
+    query: str,
+    top_k: int = 10
+) -> Dict[str, Any]:
+    """
+    Генерация ответа с использованием RAG
+    
+    Args:
+        user_id: ID пользователя
+        query: Вопрос пользователя
+        top_k: Количество документов для контекста
+        
+    Returns:
+        Dict с answer, sources, и metadata
+        
+    Raises:
+        HTTPException: Если пользователь не найден или сервис недоступен
+    """
+    # Implementation
+    pass
+```
+
+### 2. Async Everywhere
+
+**Все I/O операции асинхронные:**
+```python
+# ✅ Правильно
+async with httpx.AsyncClient() as client:
+    response = await client.get(url)
+
+async with aiofiles.open('file.txt', 'r') as f:
+    content = await f.read()
+
+# ❌ Неправильно - блокирует event loop
+response = requests.get(url)
+with open('file.txt', 'r') as f:
+    content = f.read()
+```
+
+**Concurrent operations:**
+```python
+# Параллельный запуск независимых задач
+tasks = [
+    fetch_user_data(user_id),
+    fetch_channel_data(channel_id),
+    fetch_posts_data(user_id)
+]
+user, channel, posts = await asyncio.gather(*tasks)
+```
+
+**Background tasks:**
+```python
+from fastapi import BackgroundTasks
+
+@app.post("/index/{post_id}")
+async def index_post(post_id: int, background_tasks: BackgroundTasks):
+    # Немедленный ответ
+    background_tasks.add_task(indexer_service.index_post, post_id)
+    return {"status": "queued", "post_id": post_id}
+```
+
+### 3. Error Handling и Retry
+
+**Graceful degradation:**
+```python
+class ServiceManager:
+    async def get_embeddings(self, text: str) -> List[float]:
+        """Fallback chain для embeddings"""
+        # 1. GigaChat (быстро, бесплатно)
+        try:
+            return await gigachat_embeddings(text)
+        except Exception as e:
+            logger.warning(f"GigaChat unavailable: {e}")
+        
+        # 2. OpenAI (платно, надежно)
+        try:
+            return await openai_embeddings(text)
+        except Exception as e:
+            logger.error(f"OpenAI unavailable: {e}")
+        
+        # 3. Ollama (медленно, но локально)
+        return await ollama_embeddings(text)
+```
+
+**Retry с exponential backoff:**
+```python
+import asyncio
+from typing import Callable, TypeVar
+
+T = TypeVar('T')
+
+async def retry_with_backoff(
+    func: Callable[..., T],
+    max_retries: int = 3,
+    base_delay: float = 1.0,
+    *args,
+    **kwargs
+) -> T:
+    """Retry с экспоненциальной задержкой"""
+    for attempt in range(max_retries):
+        try:
+            return await func(*args, **kwargs)
+        except Exception as e:
+            if attempt == max_retries - 1:
+                raise
+            
+            delay = base_delay * (2 ** attempt)
+            logger.warning(f"Attempt {attempt+1} failed: {e}. Retrying in {delay}s...")
+            await asyncio.sleep(delay)
+```
+
+**Circuit breaker:**
+```python
+from circuitbreaker import circuit
+
+@circuit(failure_threshold=5, recovery_timeout=60)
+async def call_external_api(url: str):
+    """Автоматическое отключение при множественных ошибках"""
+    async with httpx.AsyncClient() as client:
+        return await client.get(url)
+```
+
+### 4. Структурированное логирование
+
+```python
+import logging
+import json
+from datetime import datetime
+
+# Structured logging
+logger = logging.getLogger(__name__)
+
+def log_event(
+    event: str,
+    user_id: int,
+    **metadata
+):
+    """Structured log для аналитики"""
+    log_data = {
+        "timestamp": datetime.now().isoformat(),
+        "event": event,
+        "user_id": user_id,
+        **metadata
+    }
+    logger.info(json.dumps(log_data))
+
+# Использование
+log_event("rag_query", user_id=123, query="AI новости", duration_ms=450)
+log_event("post_indexed", user_id=123, post_id=456, vector_id="vec_789")
+```
+
+### 5. Health Checks и Observability
+
+```python
+@app.get("/health")
+async def health_check():
+    """Comprehensive health check"""
+    checks = {
+        "database": await check_database(),
+        "qdrant": await check_qdrant(),
+        "redis": await check_redis(),
+        "gigachat_proxy": await check_gigachat()
+    }
+    
+    all_healthy = all(checks.values())
+    status = "healthy" if all_healthy else "degraded"
+    
+    return {
+        "status": status,
+        "timestamp": datetime.now().isoformat(),
+        "checks": checks,
+        "version": "2.2.0"
+    }
+
+async def check_database() -> bool:
+    try:
+        db.execute("SELECT 1")
+        return True
+    except:
+        return False
+```
+
+### 6. Security
+
+**Валидация входных данных:**
+```python
+from pydantic import BaseModel, Field, validator
+
+class QueryRequest(BaseModel):
+    user_id: int = Field(..., gt=0)
+    query: str = Field(..., min_length=3, max_length=500)
+    top_k: int = Field(10, ge=1, le=50)
+    
+    @validator('query')
+    def sanitize_query(cls, v):
+        # Удаление потенциально опасных символов
+        return v.strip()
+```
+
+**Rate limiting:**
+```python
+from fastapi import HTTPException
+import redis
+
+redis_client = redis.Redis(host='redis', port=6379)
+
+async def check_rate_limit(user_id: int, endpoint: str, limit: int = 10):
+    """Rate limiting через Redis"""
+    key = f"rate:{user_id}:{endpoint}"
+    current = redis_client.incr(key)
+    
+    if current == 1:
+        redis_client.expire(key, 60)  # 1 минута
+    
+    if current > limit:
+        raise HTTPException(429, f"Rate limit exceeded: {limit}/min")
+```
+
+**Изоляция данных:**
+```python
+# Всегда фильтруйте по user_id
+posts = db.query(Post).filter(
+    Post.user_id == user_id  # Обязательно!
+).all()
+
+# Qdrant: отдельные коллекции для пользователей
+collection_name = f"user_{user_id}_posts"
+```
+
+### 7. Testing
+
+**Unit tests:**
+```python
+import pytest
+from unittest.mock import AsyncMock, patch
+
+@pytest.mark.asyncio
+async def test_rag_query():
+    """Тест RAG-запроса"""
+    # Mock embeddings service
+    with patch('embeddings_service.generate') as mock_embed:
+        mock_embed.return_value = [0.1] * 1536
+        
+        result = await rag_service.query(user_id=1, query="test")
+        
+        assert "answer" in result
+        assert len(result["sources"]) > 0
+```
+
+**Integration tests:**
+```python
+@pytest.mark.asyncio
+async def test_full_rag_pipeline():
+    """Тест полного RAG pipeline"""
+    # 1. Создание поста
+    post = await create_test_post(user_id=1, text="Test post about AI")
+    
+    # 2. Индексация
+    await indexer_service.index_post(post.id)
+    
+    # 3. Проверка индексации
+    status = await get_indexing_status(post.id)
+    assert status["status"] == "success"
+    
+    # 4. RAG-запрос
+    result = await rag_service.query(user_id=1, query="AI")
+    assert len(result["sources"]) > 0
+    assert post.id in [s["id"] for s in result["sources"]]
+```
+
+### 8. Documentation
+
+**API documentation:**
+- FastAPI автоматическая документация: `/docs`
+- Описывайте все endpoints с примерами
+- Используйте Pydantic models для request/response
+
+**Code documentation:**
+```python
+def complex_function(param1: str, param2: int) -> Dict:
+    """
+    Краткое описание функции
+    
+    Detailed description of what this function does,
+    including edge cases and important notes.
+    
+    Args:
+        param1: Описание первого параметра
+        param2: Описание второго параметра
+        
+    Returns:
+        Dict с результатами операции:
+            - key1: описание
+            - key2: описание
+            
+    Raises:
+        ValueError: Когда param2 < 0
+        HTTPException: Когда сервис недоступен
+        
+    Example:
+        >>> result = complex_function("test", 42)
+        >>> print(result)
+        {"status": "success"}
+    """
+    pass
+```
+
+### 9. Git Best Practices
+
+**Коммиты:**
+```bash
+# ✅ Правильно: осмысленные коммиты
+git commit -m "feat(rag): Add hybrid search with metadata filters"
+git commit -m "fix(parser): Handle timezone-aware datetime in parser_service"
+git commit -m "docs(rag): Update RAG quickstart guide"
+
+# ❌ Неправильно
+git commit -m "fix"
+git commit -m "updated code"
+```
+
+**Что НЕ коммитить:**
+- `.env` файлы (credentials)
+- `*.session` файлы (Telegram токены)
+- `*.db` файлы (базы данных)
+- `logs/` директория (логи)
+- `__pycache__/` (bytecode)
+
+### 10. Мониторинг и алерты
+
+**Prometheus metrics:**
+```python
+from prometheus_client import Counter, Histogram, Gauge, Info
+
+# Метрики
+rag_queries_total = Counter('rag_queries_total', 'Total RAG queries', ['user_id', 'status'])
+rag_query_duration = Histogram('rag_query_duration_seconds', 'RAG query duration')
+embeddings_cache_hit_rate = Gauge('embeddings_cache_hit_rate', 'Cache hit rate')
+system_info = Info('system', 'System information')
+
+# Использование
+rag_queries_total.labels(user_id=123, status="success").inc()
+
+with rag_query_duration.time():
+    result = await rag_service.query(user_id, query)
+
+# Экспорт метрик
+@app.get("/metrics")
+async def metrics():
+    from prometheus_client import generate_latest
+    return Response(generate_latest(), media_type="text/plain")
+```
+
+**Алерты:**
+- High error rate (>5% за 5 минут)
+- Slow queries (>5 секунд для RAG)
+- High memory usage (>80%)
+- Qdrant unavailable
+- Redis unavailable
 
 ---
 
-**Версия правил:** 2.1  
-**Последнее обновление:** 10 октября 2025  
-**Проект:** n8n-server / Telegram Channel Parser + Supabase + GPT2Giga
+**Версия правил:** 2.2.1  
+**Последнее обновление:** 11 октября 2025  
+**Проект:** n8n-server / Telegram Channel Parser + RAG System + Supabase + GPT2Giga
+
+## 🆕 Обновления версии 2.2.1
+
+### Организация проекта
+- ✅ Реорганизация документации (72 → 50 актуальных файлов)
+- ✅ Корень telethon/ очищен (11 → 3 MD файла)
+- ✅ Создан `docs/archive/` с подкатегориями (reports, testing)
+- ✅ Актуализирована навигация в docs/README.md
+- ✅ Обновлены Cursor Rules v2.2.1
+
+### Telegram Bot - RAG Команды
+- ✅ `/ask <вопрос>` - RAG-поиск ответа в постах
+- ✅ `/search <запрос>` - Гибридный поиск (посты + веб через Searxng)
+- ✅ `/recommend` - Персональные рекомендации на основе интересов
+- ✅ `/digest` - Интерактивное меню настройки AI-дайджестов
+
+### Обогащение данных
+- ✅ Автоматическое извлечение контента из ссылок (Crawl4AI)
+- ✅ Поле `enriched_content` в таблице posts
+- ✅ Миграция БД: `add_enriched_content.py`
+
+## 🆕 Обновления версии 2.2
+
+### Новая функциональность
+- ✅ RAG System - векторный поиск и генерация ответов
+- ✅ AI-дайджесты с персонализацией
+- ✅ Интеграция Qdrant, Redis, Searxng, Crawl4AI, Ollama
+- ✅ Микросервисная архитектура (telethon + rag-service)
+- ✅ Event-Driven Architecture
+
+### Архитектурные улучшения
+- ✅ Graceful degradation с fallback chains
+- ✅ Circuit breaker для внешних сервисов
+- ✅ Redis кеширование embeddings (24h TTL)
+- ✅ Batch indexing в Qdrant (до 100 постов)
+- ✅ Rate limiting через Redis
+- ✅ Structured logging для аналитики
+- ✅ Comprehensive health checks
+- ✅ Prometheus metrics integration
+
+### Performance оптимизации
+- ✅ Connection pooling через Supavisor
+- ✅ Async everywhere (httpx, aiofiles)
+- ✅ Background tasks для тяжелых операций
+- ✅ Lazy loading для векторов Qdrant
+- ✅ Concurrent operations с asyncio.gather
+
+### Документация
+- ✅ Расширенные Best Practices (10 секций)
+- ✅ RAG System компоненты и endpoints
+- ✅ Интеграция внешних сервисов с примерами
+- ✅ Тестирование (unit + integration tests)
+- ✅ Мониторинг и алерты (Prometheus)
+
+### База данных
+- ✅ Новые таблицы: digest_settings, indexing_status, rag_query_history
+- ✅ RAG миграция: scripts/migrations/add_rag_tables.py
+- ✅ Supabase RLS для изоляции данных
+
+### n8n/Flowise интеграция
+- ✅ Webhooks для событий (new_post, post_tagged, post_indexed, digest_sent)
+- ✅ Rich payload endpoints для workflows
+- ✅ Retry mechanism с exponential backoff
 
 ## 🆕 Обновления версии 2.1
 

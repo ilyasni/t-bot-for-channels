@@ -40,6 +40,11 @@
     reverse_proxy telethon:8001
 }
 
+# RAG Service API
+{$RAG_SERVICE_HOSTNAME:rag.produman.studio} {
+    reverse_proxy rag-service:8020
+}
+
 # Grafana
 {$GRAFANA_HOSTNAME} {
     reverse_proxy grafana:3000

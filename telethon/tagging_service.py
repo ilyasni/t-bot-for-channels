@@ -17,20 +17,41 @@ logger = logging.getLogger(__name__)
 
 
 class TaggingService:
-    """Сервис для автоматического тегирования постов с использованием OpenRouter API"""
+    """Сервис для автоматического тегирования постов с использованием OpenRouter или GigaChat API"""
     
     def __init__(self):
-        self.api_key = os.getenv("OPENROUTER_API_KEY")
-        self.model = os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-chat-v3.1:free")
+        # Определяем провайдера (gigachat - основной, openrouter - fallback)
+        self.provider = os.getenv("TAGGING_PROVIDER", "gigachat").lower()
+        self.fallback_to_openrouter = os.getenv("TAGGING_FALLBACK_OPENROUTER", "true").lower() == "true"
+        
+        # OpenRouter настройки
+        self.openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
+        self.openrouter_model = os.getenv("OPENROUTER_MODEL", "google/gemini-2.0-flash-exp:free")
+        self.openrouter_url = "https://openrouter.ai/api/v1/chat/completions"
+        
+        # GigaChat настройки (через gpt2giga-proxy)
+        self.gigachat_proxy_url = os.getenv("GIGACHAT_PROXY_URL", "http://gpt2giga-proxy:8090")
+        self.gigachat_url = f"{self.gigachat_proxy_url}/v1/chat/completions"
+        # GigaChat Lite оптимален для тегирования: быстрее, дешевле, выше лимиты
+        self.gigachat_model = os.getenv("GIGACHAT_MODEL", "GigaChat-Lite")
+        
+        # Выбираем API в зависимости от провайдера
+        if self.provider == "gigachat":
+            self.api_key = "dummy"  # GigaChat proxy не требует отдельного ключа
+            self.api_url = self.gigachat_url
+            self.model = self.gigachat_model
+        else:
+            self.api_key = self.openrouter_api_key
+            self.api_url = self.openrouter_url
+            self.model = self.openrouter_model
+        
         self.batch_size = int(os.getenv("TAGGING_BATCH_SIZE", "10"))
-        self.api_url = "https://openrouter.ai/api/v1/chat/completions"
         
         # HTTP Transport с встроенным retry для сетевых ошибок
         self.transport = httpx.AsyncHTTPTransport(retries=3)
         
-        # Fallback модели (по приоритету)
+        # Fallback модели (только для OpenRouter)
         self.fallback_models = [
-            "deepseek/deepseek-chat-v3.1:free",
             "google/gemini-2.0-flash-exp:free",
             "meta-llama/llama-3.2-3b-instruct:free",
             "qwen/qwen-2-7b-instruct:free",
@@ -42,29 +63,58 @@ class TaggingService:
         self.retry_delay = float(os.getenv("TAGGING_RETRY_DELAY", "2.0"))  # секунды
         self.max_retry_attempts = int(os.getenv("TAGGING_MAX_ATTEMPTS", "5"))  # общее кол-во попыток для поста
         
-        if not self.api_key or self.api_key == "your_openrouter_api_key_here":
-            logger.warning("⚠️ TaggingService: OPENROUTER_API_KEY не установлен. Тегирование отключено.")
-            self.enabled = False
-        else:
+        # Проверяем доступность API
+        if self.provider == "gigachat":
+            # GigaChat - основной провайдер (не требует API ключа, работает через proxy)
             self.enabled = True
-            logger.info(f"✅ TaggingService: Инициализирован с моделью {self.model}")
-            logger.info(f"🔄 TaggingService: Fallback модели: {', '.join(self.fallback_models[:2])}")
+            logger.info(f"✅ TaggingService: Основной провайдер - GigaChat (через {self.gigachat_proxy_url})")
+            logger.info(f"💡 TaggingService: Используется модель {self.model}")
+            if self.model == "GigaChat-Lite":
+                logger.info("⚡ GigaChat-Lite: быстрая модель с высокими лимитами - оптимально для тегирования")
             
-            # Предупреждение о нестабильных моделях
-            if self.model.startswith("deepseek"):
-                logger.warning(f"⚠️ TaggingService: Модель {self.model} может быть нестабильной")
-                logger.warning(f"💡 Рекомендуется: OPENROUTER_MODEL=google/gemini-2.0-flash-exp:free")
-            elif self.model.startswith("openai/gpt-oss"):
-                logger.warning(f"⚠️ TaggingService: Модель {self.model} устарела и может не работать")
-                logger.warning(f"💡 Рекомендуется: OPENROUTER_MODEL=google/gemini-2.0-flash-exp:free")
+            # Проверяем доступность fallback на OpenRouter
+            if self.fallback_to_openrouter and self.openrouter_api_key and self.openrouter_api_key != "your_openrouter_api_key_here":
+                logger.info(f"🔄 Fallback: OpenRouter ({self.openrouter_model}) - используется при ошибках GigaChat")
+            elif self.fallback_to_openrouter:
+                logger.warning("⚠️ Fallback на OpenRouter включен, но OPENROUTER_API_KEY не установлен")
+                
+        elif self.provider == "openrouter":
+            # OpenRouter - вспомогательный провайдер
+            if not self.api_key or self.api_key == "your_openrouter_api_key_here":
+                logger.warning("⚠️ TaggingService: OPENROUTER_API_KEY не установлен. Тегирование отключено.")
+                logger.warning("💡 Рекомендация: установите TAGGING_PROVIDER=gigachat (основной провайдер)")
+                self.enabled = False
+            else:
+                self.enabled = True
+                logger.info(f"✅ TaggingService: Основной провайдер - OpenRouter")
+                logger.info(f"   Модель: {self.model}")
+                logger.info(f"   Fallback модели: {', '.join(self.fallback_models[:2])}")
+                
+                # Предупреждение о лимитах бесплатных моделей
+                if ":free" in self.model:
+                    logger.warning("⚠️ TaggingService: Бесплатные модели имеют лимит 50 запросов/день")
+                    logger.warning("💡 Рекомендация: TAGGING_PROVIDER=gigachat (лимит ~10,000/день)")
+                
+                # Предупреждение о нестабильных моделях
+                if self.model.startswith("deepseek"):
+                    logger.warning(f"⚠️ TaggingService: Модель {self.model} может быть нестабильной")
+                    logger.warning(f"💡 Рекомендуется: OPENROUTER_MODEL=google/gemini-2.0-flash-exp:free")
+                elif self.model.startswith("openai/gpt-oss"):
+                    logger.warning(f"⚠️ TaggingService: Модель {self.model} устарела и может не работать")
+                    logger.warning(f"💡 Рекомендуется: OPENROUTER_MODEL=google/gemini-2.0-flash-exp:free")
+        else:
+            logger.error(f"❌ Неизвестный провайдер: {self.provider}")
+            logger.error("💡 Доступные: gigachat (рекомендуется), openrouter")
+            self.enabled = False
     
-    async def generate_tags_for_text(self, text: str, retry_count: int = 0) -> Optional[List[str]]:
+    async def generate_tags_for_text(self, text: str, retry_count: int = 0, use_fallback: bool = False) -> Optional[List[str]]:
         """
         Генерация тегов для текста с использованием LLM с retry и fallback механизмом
         
         Args:
             text: Текст поста для анализа
             retry_count: Номер попытки (для внутреннего использования)
+            use_fallback: Использовать fallback провайдер (OpenRouter если основной GigaChat)
             
         Returns:
             Список тегов или None в случае ошибки
@@ -77,9 +127,26 @@ class TaggingService:
             logger.debug("TaggingService: Текст слишком короткий для тегирования")
             return []
         
-        # Определяем модель для текущей попытки
+        # Определяем провайдер и модель для текущей попытки
+        current_provider = self.provider
+        current_api_url = self.api_url
+        current_api_key = self.api_key
         current_model = self.model
-        if retry_count > 0 and retry_count <= len(self.fallback_models):
+        
+        # Если используем fallback на OpenRouter (при ошибках GigaChat)
+        if use_fallback and self.provider == "gigachat" and self.fallback_to_openrouter:
+            if self.openrouter_api_key and self.openrouter_api_key != "your_openrouter_api_key_here":
+                current_provider = "openrouter"
+                current_api_url = self.openrouter_url
+                current_api_key = self.openrouter_api_key
+                current_model = self.openrouter_model
+                logger.info(f"🔄 TaggingService: Используем fallback - OpenRouter ({current_model})")
+            else:
+                logger.warning("⚠️ Fallback на OpenRouter недоступен (нет API ключа)")
+                return None
+        
+        # Fallback модели для OpenRouter (если основной провайдер OpenRouter)
+        elif self.provider == "openrouter" and retry_count > 0 and retry_count <= len(self.fallback_models):
             current_model = self.fallback_models[retry_count - 1]
             logger.info(f"🔄 TaggingService: Попытка {retry_count + 1}, используем fallback модель: {current_model}")
         
@@ -103,9 +170,9 @@ class TaggingService:
 
             async with httpx.AsyncClient(transport=self.transport, timeout=30.0) as client:
                 response = await client.post(
-                    self.api_url,
+                    current_api_url,
                     headers={
-                        "Authorization": f"Bearer {self.api_key}",
+                        "Authorization": f"Bearer {current_api_key}",
                         "Content-Type": "application/json"
                     },
                     json={
@@ -125,17 +192,56 @@ class TaggingService:
                     error_msg = f"API Error {response.status_code}: {response.text[:200]}"
                     logger.error(f"❌ TaggingService: Ошибка API: {response.status_code} - {response.text[:500]}")
                     
+                    # Обработка 429 Rate Limit
+                    if response.status_code == 429:
+                        try:
+                            error_data = response.json()
+                            reset_timestamp = error_data.get("error", {}).get("metadata", {}).get("headers", {}).get("X-RateLimit-Reset")
+                            
+                            if reset_timestamp:
+                                reset_time = datetime.fromtimestamp(int(reset_timestamp) / 1000, timezone.utc)
+                                now = datetime.now(timezone.utc)
+                                wait_seconds = (reset_time - now).total_seconds()
+                                
+                                if wait_seconds > 0:
+                                    logger.warning(f"⏰ TaggingService: Rate limit достигнут. Лимит сбросится {reset_time.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+                                    logger.warning(f"💡 Рекомендация: переключитесь на GigaChat или добавьте $10 credits в OpenRouter")
+                                    
+                                    # Если ожидание меньше 5 минут - ждем
+                                    if wait_seconds <= 300:
+                                        logger.info(f"⏳ Ожидаем {wait_seconds:.0f}с до сброса лимита...")
+                                        await asyncio.sleep(wait_seconds + 5)  # +5 секунд запас
+                                        return await self.generate_tags_for_text(text, retry_count + 1)
+                            
+                            # Если ожидание долгое или нет timestamp - пропускаем
+                            logger.warning("⏸️ TaggingService: Rate limit превышен. Пост будет обработан при следующей попытке.")
+                        except Exception as e:
+                            logger.error(f"❌ Ошибка обработки 429: {e}")
+                        
+                        return None
+                    
                     # Retry для 5xx ошибок
                     if response.status_code >= 500 and retry_count < self.max_retries:
                         delay = self.retry_delay * (2 ** retry_count)  # Экспоненциальная задержка
                         logger.info(f"⏳ TaggingService: Retry через {delay:.1f}с...")
                         await asyncio.sleep(delay)
-                        return await self.generate_tags_for_text(text, retry_count + 1)
+                        return await self.generate_tags_for_text(text, retry_count + 1, use_fallback)
+                    
+                    # Fallback на OpenRouter если GigaChat не работает (только при серьезных ошибках)
+                    if not use_fallback and self.provider == "gigachat" and self.fallback_to_openrouter:
+                        if response.status_code in [502, 503, 504]:
+                            logger.warning(f"⚠️ GigaChat недоступен ({response.status_code}), переключаемся на OpenRouter")
+                            return await self.generate_tags_for_text(text, retry_count=0, use_fallback=True)
                     
                     return None
                 
                 result = response.json()
                 content = result.get("choices", [{}])[0].get("message", {}).get("content", "")
+                
+                # DEBUG: Логируем raw bytes для отладки проблем с кодировкой
+                if content:
+                    logger.debug(f"Raw content bytes (первые 100): {content.encode('utf-8')[:100]}")
+                    logger.debug(f"Content type: {type(content)}, len={len(content)}")
                 
                 # Проверяем что content не пустой
                 if not content or content.strip() == "":
@@ -148,48 +254,98 @@ class TaggingService:
                         delay = self.retry_delay * (2 ** retry_count)
                         logger.info(f"⏳ TaggingService: Retry через {delay:.1f}с...")
                         await asyncio.sleep(delay)
-                        return await self.generate_tags_for_text(text, retry_count + 1)
+                        return await self.generate_tags_for_text(text, retry_count + 1, use_fallback)
+                    
+                    # Fallback на OpenRouter если GigaChat вернул пустой ответ
+                    if not use_fallback and self.provider == "gigachat" and self.fallback_to_openrouter:
+                        logger.warning("⚠️ GigaChat вернул пустой ответ, переключаемся на OpenRouter")
+                        return await self.generate_tags_for_text(text, retry_count=0, use_fallback=True)
                     
                     return None
                 
                 # Сохраняем оригинальный ответ для логирования
                 original_content = content
+                logger.debug(f"Step 0 - Original: {repr(content[:100])}")
                 
                 # Парсим JSON ответ
                 # Убираем возможные markdown блоки
                 content = content.strip()
+                logger.debug(f"Step 1 - After strip: {repr(content[:100])}")
+                
                 if content.startswith("```"):
                     lines = content.split("\n")
                     content = "\n".join(lines[1:-1]) if len(lines) > 2 else content
                     content = content.strip()
+                    logger.debug(f"Step 2 - After markdown removal: {repr(content[:100])}")
                 
                 # Удаляем префиксы типа "json" после ```
                 if content.startswith("json"):
                     content = content[4:].strip()
+                    logger.debug(f"Step 3 - After 'json' prefix removal: {repr(content[:100])}")
                 
-                # Пытаемся найти JSON массив в тексте (используем жадный поиск для полного массива)
-                # Ищем массив от первой [ до последней ]
-                json_match = re.search(r'\[.*\]', content, re.DOTALL)
+                # Пытаемся найти JSON массив в тексте
+                # Используем НЕ-жадный квантификатор для точного поиска первого массива
+                json_match = re.search(r'\[.*?\]', content, re.DOTALL)
                 if json_match:
                     content = json_match.group(0)
+                    logger.debug(f"Step 4 - After regex extract: {repr(content[:100])}")
+                    logger.debug(f"         Content bytes: {content.encode('utf-8')[:100]}")
                 else:
                     # Если не нашли массив, логируем полный ответ
                     logger.error(f"❌ TaggingService: Не найден JSON массив в ответе")
-                    logger.error(f"Оригинальный ответ: {original_content[:300]}")
+                    logger.error(f"Полный оригинальный ответ: {original_content[:500]}")
                     return None
                 
                 # Очищаем от возможных trailing запятых перед закрывающей скобкой
+                before_sub = content
                 content = re.sub(r',\s*\]', ']', content)
+                if before_sub != content:
+                    logger.debug(f"Step 5 - After trailing comma removal: {repr(content[:100])}")
+                
+                # КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Заменяем типографские кавычки на обычные
+                # API может возвращать U+201C (") и U+201D (") вместо ASCII " (34)
+                content = content.replace('\u201c', '"').replace('\u201d', '"')  # Двойные кавычки
+                content = content.replace('\u2018', "'").replace('\u2019', "'")  # Одинарные кавычки (на всякий случай)
+                logger.debug(f"Step 5b - After quote normalization: {repr(content[:100])}")
+                logger.debug(f"         Quote check: {[ord(c) for c in content if ord(c) in [34, 8220, 8221]]}")
                 
                 # Пытаемся распарсить JSON
-                tags = json.loads(content)
+                try:
+                    logger.debug(f"Step 6 - Trying json.loads()...")
+                    tags = json.loads(content)
+                    logger.debug(f"Step 7 - Success! Got {len(tags)} tags")
+                except json.JSONDecodeError as json_err:
+                    # Дополнительная отладочная информация
+                    logger.error(f"❌ JSON decode error: {json_err}")
+                    logger.error(f"Пытались распарсить: {repr(content[:200])}")
+                    logger.error(f"Content length: {len(content)}, bytes length: {len(content.encode('utf-8'))}")
+                    logger.error(f"First 50 chars: {[ord(c) for c in content[:50]]}")
+                    logger.error(f"Полный ответ API: {repr(original_content[:500])}")
+                    raise
                 
                 if isinstance(tags, list) and all(isinstance(tag, str) for tag in tags):
                     # Очистка и валидация тегов
-                    tags = [tag.strip().lower() for tag in tags if tag.strip()]
-                    tags = tags[:7]  # Максимум 7 тегов
-                    logger.info(f"✅ TaggingService: Сгенерировано {len(tags)} тегов")
-                    return tags
+                    cleaned_tags = []
+                    seen_tags = set()  # Для отслеживания дубликатов
+                    
+                    for tag in tags:
+                        tag_cleaned = tag.strip().lower()
+                        # Пропускаем пустые теги и дубликаты
+                        if tag_cleaned and tag_cleaned not in seen_tags:
+                            # Дополнительная валидация: длина тега
+                            if 2 <= len(tag_cleaned) <= 50:  # Минимум 2 символа, макс 50
+                                cleaned_tags.append(tag_cleaned)
+                                seen_tags.add(tag_cleaned)
+                    
+                    # Ограничиваем количество тегов
+                    cleaned_tags = cleaned_tags[:7]  # Максимум 7 тегов
+                    
+                    if cleaned_tags:
+                        logger.info(f"✅ TaggingService: Сгенерировано {len(cleaned_tags)} уникальных тегов")
+                        return cleaned_tags
+                    else:
+                        logger.warning(f"⚠️ TaggingService: После очистки не осталось валидных тегов")
+                        return []
                 else:
                     logger.error(f"❌ TaggingService: Неверный формат ответа: {content}")
                     return None
@@ -208,9 +364,21 @@ class TaggingService:
             return None
         except httpx.TimeoutException:
             logger.error("❌ TaggingService: Превышено время ожидания API")
+            
+            # Fallback на OpenRouter при timeout GigaChat
+            if not use_fallback and self.provider == "gigachat" and self.fallback_to_openrouter:
+                logger.warning("⚠️ GigaChat timeout, переключаемся на OpenRouter")
+                return await self.generate_tags_for_text(text, retry_count=0, use_fallback=True)
+            
             return None
         except Exception as e:
             logger.error(f"❌ TaggingService: Ошибка генерации тегов: {str(e)}")
+            
+            # Fallback на OpenRouter при критических ошибках GigaChat
+            if not use_fallback and self.provider == "gigachat" and self.fallback_to_openrouter:
+                logger.warning("⚠️ GigaChat ошибка, пробуем OpenRouter")
+                return await self.generate_tags_for_text(text, retry_count=0, use_fallback=True)
+            
             return None
     
     async def update_post_tags(self, post_id: int, db: SessionLocal = None, force_retry: bool = False) -> bool:

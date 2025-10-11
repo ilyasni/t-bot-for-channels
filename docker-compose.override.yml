@@ -33,6 +33,14 @@ services:
       # Система хранения постов
       - DEFAULT_RETENTION_DAYS=${DEFAULT_RETENTION_DAYS:-30}
       - CLEANUP_SCHEDULE_TIME=${CLEANUP_SCHEDULE_TIME:-03:00}
+      # Tagging (AI) настройки
+      # GigaChat - основной провайдер, OpenRouter - fallback
+      - TAGGING_PROVIDER=${TAGGING_PROVIDER:-gigachat}
+      - TAGGING_FALLBACK_OPENROUTER=${TAGGING_FALLBACK_OPENROUTER:-true}
+      - GIGACHAT_PROXY_URL=http://gpt2giga-proxy:8090
+      - GIGACHAT_MODEL=${GIGACHAT_MODEL:-GigaChat-Lite}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - OPENROUTER_MODEL=${OPENROUTER_MODEL:-google/gemini-2.0-flash-exp:free}
       # Часовой пояс
       - TZ=Europe/Moscow
     restart: unless-stopped
@@ -78,8 +86,62 @@ services:
       # GigaChat API credentials (get from Sber)
       - GIGACHAT_CREDENTIALS=${GIGACHAT_CREDENTIALS}
       - PROXY_HOST=0.0.0.0
+      # Модель по умолчанию (если клиент не передает свою)
+      - GIGACHAT_MODEL=${GIGACHAT_MODEL:-GigaChat-Lite}
+      # Разрешить клиентам передавать свою модель (tagging_service передает GigaChat-Lite, ai_digest передает GigaChat)
+      - GPT2GIGA_PASS_MODEL=true
+      # Модель для embeddings
+      - GPT2GIGA_EMBEDDINGS=EmbeddingsGigaR
     restart: unless-stopped
     networks:
+      - localai_default
+
+  rag-service:
+    build:
+      context: ./telethon/rag_service
+      dockerfile: Dockerfile.rag
+    container_name: rag-service
+    ports:
+      - "8020:8020"
+    volumes:
+      - ./telethon/rag_service:/app
+      - ./telethon/data:/app/data
+      - ./telethon/logs:/app/logs
+      - ./telethon/database.py:/app/database.py
+      - ./telethon/models.py:/app/models.py
+      - ./telethon/crypto_utils.py:/app/crypto_utils.py
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8020
+      - DATABASE_URL=${TELEGRAM_DATABASE_URL:-sqlite:///./data/telethon_bot.db}
+      - QDRANT_URL=http://qdrant:6333
+      - QDRANT_API_KEY=${QDRANT_API_KEY}
+      - QDRANT_EXTERNAL_URL=https://qdrant.produman.studio
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - OPENROUTER_MODEL=${OPENROUTER_MODEL:-google/gemini-2.0-flash-exp:free}
+      - GIGACHAT_PROXY_URL=http://gpt2giga-proxy:8090
+      - GIGACHAT_ENABLED=true
+      - EMBEDDING_MAX_TOKENS_GIGACHAT=1536
+      - EMBEDDING_OVERLAP_TOKENS_GIGACHAT=256
+      - RAG_TOP_K=10
+      - RAG_MIN_SCORE=0.7
+      - RAG_CONTEXT_WINDOW=4000
+      - RAG_TEMPERATURE=0.3
+      # Searxng для веб-поиска
+      - SEARXNG_ENABLED=${SEARXNG_ENABLED:-true}
+      - SEARXNG_URL=${SEARXNG_URL:-https://searxng.produman.studio}
+      - SEARXNG_USER=${SEARXNG_USER}
+      - SEARXNG_PASSWORD=${SEARXNG_PASSWORD}
+      - SEARXNG_MAX_RESULTS=${SEARXNG_MAX_RESULTS:-5}
+      - TZ=Europe/Moscow
+    restart: unless-stopped
+    depends_on:
+      telethon:
+        condition: service_started
+      gpt2giga-proxy:
+        condition: service_started
+    networks:
+      - default
       - localai_default
 
 networks:

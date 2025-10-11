@@ -1,0 +1,33 @@
+# RAG Service Dependencies - Minimal
+
+# FastAPI Framework
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+pydantic==2.5.3
+python-dotenv==1.0.0
+
+# Vector DB
+qdrant-client==1.7.0
+
+# Tokenizer (легкий, ~2MB)
+tiktoken==0.5.2
+
+# HTTP Client
+httpx==0.26.0
+
+# Scheduler
+APScheduler==3.10.4
+
+# Database
+sqlalchemy==2.0.25
+psycopg2-binary==2.9.9
+
+# Utils
+python-dateutil==2.8.2
+pytz==2023.3
+
+# Note: sentence-transformers (опционально, ~3GB)
+# Раскомментируйте если нужен fallback для embeddings:
+# sentence-transformers==2.3.1
+# torch==2.1.2
+
