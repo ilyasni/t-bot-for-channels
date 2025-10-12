@@ -26,6 +26,7 @@ from schemas import (
 from indexer import indexer_service
 from vector_db import qdrant_client
 from embeddings import embeddings_service
+from scheduler import digest_scheduler
 
 # Настройка логирования
 logging.basicConfig(
@@ -49,7 +50,57 @@ async def startup_event():
     logger.info(f"   Qdrant URL: {config.QDRANT_URL}")
     logger.info(f"   GigaChat embeddings: {config.GIGACHAT_ENABLED}")
     logger.info(f"   Database: {config.DATABASE_URL}")
+    
+    # Запуск планировщика дайджестов
+    try:
+        digest_scheduler.start()
+        
+        # Загрузка расписаний для всех пользователей с enabled=true
+        db = SessionLocal()
+        try:
+            active_settings = db.query(DigestSettings).filter(
+                DigestSettings.enabled == True
+            ).all()
+            
+            logger.info(f"📅 Найдено {len(active_settings)} активных расписаний дайджестов")
+            
+            for settings in active_settings:
+                try:
+                    # Конвертируем frequency в days_of_week
+                    if settings.frequency == "daily":
+                        days_of_week = "mon-sun"
+                    elif settings.frequency == "weekly":
+                        # Для weekly используем days_of_week из настроек или понедельник по умолчанию
+                        days_of_week = settings.days_of_week or "mon"
+                    else:
+                        days_of_week = "mon-sun"
+                    
+                    await digest_scheduler.schedule_digest(
+                        user_id=settings.user_id,
+                        time=settings.time,
+                        days_of_week=days_of_week,
+                        timezone=settings.timezone
+                    )
+                except Exception as e:
+                    logger.error(f"❌ Не удалось запланировать дайджест для user {settings.user_id}: {e}")
+        finally:
+            db.close()
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка запуска планировщика дайджестов: {e}")
+    
     logger.info("✅ RAG Service готов к работе")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Корректная остановка сервиса"""
+    logger.info("🛑 RAG Service останавливается...")
+    try:
+        digest_scheduler.stop()
+    except Exception as e:
+        logger.error(f"❌ Ошибка остановки планировщика: {e}")
+    logger.info("✅ RAG Service остановлен")
 
 
 @app.get("/")
