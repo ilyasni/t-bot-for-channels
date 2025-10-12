@@ -50,6 +50,14 @@ class User(Base):
     is_blocked = Column(Boolean, default=False)  # Заблокирован ли пользователь
     block_expires = Column(DateTime, nullable=True)  # Время окончания блокировки
     
+    # Роли и подписки (новая система авторизации)
+    role = Column(String, default="user")  # admin, user
+    subscription_type = Column(String, default="free")  # free, trial, basic, premium, enterprise
+    subscription_expires = Column(DateTime, nullable=True)
+    subscription_started_at = Column(DateTime, nullable=True)
+    max_channels = Column(Integer, default=3)  # Лимит каналов по подписке
+    invited_by = Column(Integer, ForeignKey("users.id"), nullable=True)  # Кто пригласил
+    
     # Связи
     channels = relationship(
         "Channel",
@@ -59,6 +67,11 @@ class User(Base):
     posts = relationship("Post", back_populates="user", cascade="all, delete-orphan")
     digest_settings = relationship("DigestSettings", back_populates="user", uselist=False, cascade="all, delete-orphan")
     query_history = relationship("RAGQueryHistory", back_populates="user", cascade="all, delete-orphan")
+    
+    # Связи для системы инвайтов и подписок
+    inviter = relationship("User", remote_side=[id], foreign_keys=[invited_by])
+    created_invites = relationship("InviteCode", foreign_keys="InviteCode.created_by", back_populates="creator")
+    used_invites = relationship("InviteCode", foreign_keys="InviteCode.used_by", back_populates="user")
     
     def set_encrypted_api_hash(self, api_hash: str):
         """Установить зашифрованный API hash"""
@@ -183,6 +196,29 @@ class User(Base):
             'created_at': row[2],
             'last_parsed_at': row[3]
         }) for row in result.all()]
+    
+    def check_subscription_active(self) -> bool:
+        """Проверка активности подписки"""
+        if not self.subscription_expires:
+            return True  # Безлимитная подписка
+        
+        # Убеждаемся что даты timezone-aware
+        expires = self.subscription_expires
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+        
+        return expires > datetime.now(timezone.utc)
+    
+    def is_admin(self) -> bool:
+        """Проверка является ли пользователь администратором"""
+        return self.role == "admin"
+    
+    def can_add_channel(self) -> bool:
+        """Проверка может ли пользователь добавить еще канал"""
+        if not self.check_subscription_active():
+            return False
+        current_count = len(self.channels)
+        return current_count < self.max_channels
 
 class Channel(Base):
     __tablename__ = "channels"
@@ -421,4 +457,84 @@ class RAGQueryHistory(Base):
     extracted_topics = Column(JSON, nullable=True)
     
     # Связи
-    user = relationship("User", back_populates="query_history") 
+    user = relationship("User", back_populates="query_history")
+
+
+class InviteCode(Base):
+    """Инвайт коды для регистрации новых пользователей"""
+    __tablename__ = "invite_codes"
+    
+    code = Column(String, primary_key=True, index=True)  # INVITE2024ABC
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    
+    used_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    used_at = Column(DateTime, nullable=True)
+    
+    expires_at = Column(DateTime, nullable=False)  # Срок действия кода
+    max_uses = Column(Integer, default=1)  # Сколько раз можно использовать
+    uses_count = Column(Integer, default=0)  # Сколько раз использован
+    
+    # Автоматические настройки для приглашенного
+    default_subscription = Column(String, default="free")  # Какую подписку дать
+    default_trial_days = Column(Integer, default=0)  # Trial период в днях
+    
+    # Связи
+    creator = relationship("User", foreign_keys=[created_by], back_populates="created_invites")
+    user = relationship("User", foreign_keys=[used_by], back_populates="used_invites")
+    
+    @staticmethod
+    def generate_code() -> str:
+        """Генерация уникального инвайт кода"""
+        import secrets
+        import string
+        alphabet = string.ascii_uppercase + string.digits
+        return ''.join(secrets.choice(alphabet) for _ in range(12))
+    
+    def is_valid(self) -> bool:
+        """Проверка валидности инвайт кода"""
+        now = datetime.now(timezone.utc)
+        
+        # Убеждаемся что expires_at timezone-aware
+        expires = self.expires_at
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+        
+        if now > expires:
+            return False
+        if self.uses_count >= self.max_uses:
+            return False
+        return True
+    
+    def use(self, user_id: int) -> bool:
+        """Использование инвайт кода"""
+        if not self.is_valid():
+            return False
+        
+        self.uses_count += 1
+        if self.max_uses == 1:  # Одноразовый код
+            self.used_by = user_id
+            self.used_at = datetime.now(timezone.utc)
+        
+        return True
+
+
+class SubscriptionHistory(Base):
+    """История изменений подписок для аудита"""
+    __tablename__ = "subscription_history"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    
+    action = Column(String, nullable=False)  # created, upgraded, downgraded, renewed, expired, revoked
+    old_type = Column(String, nullable=True)
+    new_type = Column(String, nullable=False)
+    
+    changed_by = Column(Integer, ForeignKey("users.id"), nullable=True)  # Админ который изменил
+    changed_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+    
+    notes = Column(Text, nullable=True)
+    
+    # Связи
+    user = relationship("User", foreign_keys=[user_id])
+    admin = relationship("User", foreign_keys=[changed_by]) 

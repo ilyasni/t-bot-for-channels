@@ -93,10 +93,11 @@ def clone_supabase_repo():
         run_command(["git", "checkout", "master"])
         os.chdir("..")
     else:
-        print("Supabase repository already exists, updating...")
-        os.chdir("supabase")
-        run_command(["git", "pull"])
-        os.chdir("..")
+        print("Supabase repository already exists, skipping update (avoiding permissions issues)...")
+        # Temporarily commented out to avoid git permission issues
+        # os.chdir("supabase")
+        # run_command(["git", "pull"])
+        # os.chdir("..")
 
 def prepare_supabase_env():
     """Copy .env to .env in supabase/docker."""
@@ -105,8 +106,16 @@ def prepare_supabase_env():
         return
     env_path = os.path.join("supabase", "docker", ".env")
     env_example_path = os.path.join(".env")
+    
+    if os.path.exists(env_path):
+        print(f"✓ {env_path} already exists, skipping copy")
+        return
+        
     print("Copying .env in root to .env in supabase/docker...")
-    shutil.copyfile(env_example_path, env_path)
+    try:
+        shutil.copyfile(env_example_path, env_path)
+    except PermissionError:
+        print(f"⚠ Warning: Permission denied writing to {env_path}, file may be owned by root")
 
 def stop_existing_containers():
     """Stop and remove existing containers for our unified project ('localai')."""

@@ -2183,3 +2183,917 @@ async def metrics():
 - ✅ Исправлена команда `logs` в dev.sh (использует прямые docker команды)
 - ✅ Исправлены относительные пути в dev.sh на абсолютные
 - ✅ dev.sh перемещен из корня в `scripts/utils/` согласно правилам
+
+---
+
+## 🆕 Обновления версии 3.1 (12 октября 2025)
+
+### ⚠️ ВАЖНЫЕ ПРАВИЛА РАЗРАБОТКИ
+
+**ВСЕГДА используйте Context7 для поиска решений:**
+```python
+# Перед реализацией новой функции:
+# 1. Изучите документацию через Context7
+# 2. Найдите best practices
+# 3. Проверьте примеры использования
+
+# Пример: Перед добавлением Telegram Mini App
+# → Используйте Context7 для изучения Telegram Mini Apps API
+# → Найдите примеры интеграции WebAppInfo
+# → Проверьте best practices для темной темы
+```
+
+**ВСЕГДА используйте PostgreSQL (Supabase) и Redis:**
+```python
+# ✅ PostgreSQL для всех данных
+DATABASE_URL = os.getenv("TELEGRAM_DATABASE_URL")  # PostgreSQL через Supabase
+# В docker: postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/postgres
+
+# ✅ Redis для кеширования и sessions
+redis_client = redis.Redis(host='redis', port=6379)
+# НЕТ пароля в Valkey по умолчанию
+
+# ❌ НИКОГДА не используйте SQLite как fallback!
+# ❌ НЕ проверяйте "if sqlite in DATABASE_URL"
+```
+
+### QR Login система (без SMS кодов!)
+
+**Новая система авторизации через Telegram Mini App**
+
+**Ключевые компоненты:**
+
+1. **`qr_auth_manager.py`** - управление QR сессиями
+   ```python
+   class QRAuthManager:
+       def __init__(self):
+           # Redis для shared state между контейнерами
+           self.redis_client = redis.Redis(host='redis', port=6379, decode_responses=True)
+       
+       async def create_qr_session(self, telegram_id: int, invite_code: str):
+           # 1. Создаём Telethon client
+           # 2. Вызываем client.qr_login()
+           # 3. Генерируем deep link: tg://login?token=...
+           # 4. Сохраняем в Redis с TTL 10 минут
+           # 5. Запускаем background polling qr_login.wait()
+       
+       async def _poll_authorization(self, session_id: str, qr_login):
+           # Ждём client.qr_login().wait()
+           # При успехе → _finalize_authorization()
+       
+       async def _finalize_authorization(self, session_id: str):
+           # 1. Проверяем ownership (client.get_me().id == telegram_id)
+           # 2. Сохраняем session в shared_auth_manager
+           # 3. Обновляем user.is_authenticated = True
+           # 4. Активируем подписку из invite code
+           # 5. Устанавливаем max_channels
+   ```
+
+2. **Mini App UI** (FastAPI endpoint `/qr-auth`)
+   ```python
+   @app.get("/qr-auth", response_class=HTMLResponse)
+   async def qr_auth_page(session_id: str):
+       # 1. Получаем session из Redis
+       # 2. Генерируем QR код (qrcode[pil])
+       # 3. Отдаём HTML с:
+       #    - QR код для камеры
+       #    - Deep link кнопка (tg.openTelegramLink)
+       #    - Copy token кнопка
+       # 4. JavaScript polling /qr-auth-status каждые 2 секунды
+       # 5. При authorized → tg.close()
+   ```
+
+3. **Bot handler** (`bot_login_handlers_qr.py`)
+   ```python
+   async def login_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+       # 1. Валидация invite code
+       # 2. Создание/получение user
+       # 3. Создание QR session через qr_auth_manager
+       # 4. Отправка кнопки с WebAppInfo
+       # 5. ConversationHandler → WAITING_QR_SCAN
+   ```
+
+**Best practices:**
+- ✅ Redis обязателен для shared state между telethon-bot и telethon
+- ✅ TTL для QR sessions: 10 минут (600 секунд)
+- ✅ После сканирования QR требуется подтверждение в Telegram
+- ✅ Visibility change events для проверки статуса при возврате в Mini App
+- ✅ Используйте Context7 для изучения Telegram Mini Apps API
+
+**Файлы:**
+- `qr_auth_manager.py` - менеджер QR сессий
+- `bot_login_handlers_qr.py` - ConversationHandler для /login
+- `shared_auth_manager.py` - управление Telethon клиентами
+- `main.py` - endpoints /qr-auth и /qr-auth-status
+
+### Система ролей и подписок
+
+**Роли пользователей:**
+```python
+# models.py
+class User(Base):
+    role = Column(String, default="user")  # admin, user
+    subscription_type = Column(String, default="free")
+    subscription_expires = Column(DateTime, nullable=True)
+    max_channels = Column(Integer, default=3)
+    invited_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    
+    def is_admin(self) -> bool:
+        return self.role == "admin"
+```
+
+**Subscription tiers** (`subscription_config.py`):
+```python
+SUBSCRIPTION_TIERS = {
+    "free": {
+        "max_channels": 3,
+        "max_posts_per_day": 100,
+        "rag_queries_per_day": 10,
+        "ai_digest": False,
+        "price_rub": 0
+    },
+    "trial": {
+        "max_channels": 10,
+        "duration_days": 7,
+        "price_rub": 0
+    },
+    "basic": {
+        "max_channels": 10,
+        "max_posts_per_day": 500,
+        "rag_queries_per_day": 50,
+        "ai_digest": True,
+        "price_rub": 299
+    },
+    "premium": {
+        "max_channels": 50,
+        "max_posts_per_day": 2000,
+        "rag_queries_per_day": 200,
+        "price_rub": 999
+    },
+    "enterprise": {
+        "max_channels": 999,
+        "max_posts_per_day": 999999,
+        "rag_queries_per_day": 999999,
+        "price_rub": 4999
+    }
+}
+```
+
+**Invite codes** (`models.py`):
+```python
+class InviteCode(Base):
+    __tablename__ = "invite_codes"
+    
+    code = Column(String, primary_key=True)  # Генерируется generate_code()
+    created_by = Column(Integer, ForeignKey("users.id"))
+    expires_at = Column(DateTime, nullable=False)
+    max_uses = Column(Integer, default=1)
+    uses_count = Column(Integer, default=0)
+    default_subscription = Column(String, default="free")
+    default_trial_days = Column(Integer, default=0)
+    
+    @staticmethod
+    def generate_code() -> str:
+        """Генерирует 12-символьный код: ABC123XYZ456"""
+        return ''.join(random.choices(string.ascii_uppercase + string.digits, k=12))
+    
+    def is_valid(self) -> bool:
+        """Проверка валидности кода"""
+        now = datetime.now(timezone.utc)
+        return (
+            self.uses_count < self.max_uses and
+            self.expires_at > now
+        )
+```
+
+**Проверка лимитов:**
+```python
+# При добавлении канала
+async def add_channel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Проверяем лимит
+    if len(user.channels) >= user.max_channels:
+        await update.message.reply_text(
+            f"❌ Достигнут лимит каналов: {user.max_channels}\n"
+            f"Текущая подписка: {user.subscription_type}\n"
+            f"Используйте /subscription для апгрейда"
+        )
+        return
+```
+
+### Admin Panel через Telegram Mini App
+
+**Полнофункциональная SPA для администраторов**
+
+**Архитектура:**
+```
+/admin команда (bot)
+    ↓
+Admin Session в Redis (TTL: 1 час)
+    ↓
+WebAppInfo кнопка → Mini App
+    ↓
+GET /admin-panel (FastAPI)
+    ↓
+HTML/CSS/JS SPA с tabs
+    ↓
+REST API (/api/admin/*)
+    ↓
+PostgreSQL + Redis
+```
+
+**Компоненты:**
+
+1. **`admin_panel_manager.py`** - управление admin sessions
+   ```python
+   class AdminPanelManager:
+       def __init__(self):
+           self.redis_client = redis.Redis(host='redis', port=6379, decode_responses=True)
+           self.session_ttl = 3600  # 1 час
+       
+       def create_admin_session(self, telegram_id: int) -> Optional[str]:
+           # 1. Проверяем user.role == "admin"
+           # 2. Генерируем session_token (uuid4)
+           # 3. Сохраняем в Redis с TTL
+           # 4. Возвращаем token
+       
+       def verify_admin_session(self, token: str, admin_id: int) -> bool:
+           # 1. Проверяем token в Redis
+           # 2. Проверяем admin_id совпадает
+           # 3. Проверяем expires (timezone-aware!)
+   ```
+
+2. **API Endpoints** (`main.py`)
+   
+   **Users Management:**
+   - `GET /api/admin/users` - список с фильтрами (role, subscription, search)
+   - `GET /api/admin/user/{id}` - детали пользователя
+   - `POST /api/admin/user/{id}/role` - изменить роль
+   - `POST /api/admin/user/{id}/subscription` - изменить подписку
+   - `POST /api/admin/user/{id}/max_channels` - установить лимит
+   - `POST /api/admin/user/{id}/block` - заблокировать
+   - `DELETE /api/admin/user/{id}/auth` - сбросить авторизацию
+   
+   **Invite Codes:**
+   - `GET /api/admin/invites` - список кодов
+   - `POST /api/admin/invite/create` - создать код
+   - `POST /api/admin/invite/{code}/deactivate` - деактивировать
+   
+   **Statistics:**
+   - `GET /api/admin/stats/summary` - общая статистика
+   - `GET /api/admin/stats/registrations?days=7` - регистрации
+   - `GET /api/admin/stats/subscriptions` - breakdown
+
+3. **Security decorator:**
+   ```python
+   def require_admin(func):
+       @wraps(func)
+       async def wrapper(*args, **kwargs):
+           admin_id = kwargs.get('admin_id')
+           token = kwargs.get('token')
+           
+           if not admin_panel_manager.verify_admin_session(token, admin_id):
+               raise HTTPException(403, "Unauthorized")
+           
+           return await func(*args, **kwargs)
+       return wrapper
+   
+   @app.get("/api/admin/users")
+   @require_admin
+   async def get_users_api(admin_id: int, token: str, ...):
+       # Защищённый endpoint
+   ```
+
+4. **Frontend (SPA)** - 2700+ строк HTML/CSS/JS
+   
+   **Tabs навигация:**
+   - 📊 Dashboard - метрики, быстрые действия
+   - 👥 Пользователи - управление, поиск, фильтры
+   - 🎫 Инвайт коды - создание, деактивация
+   - 📈 Статистика - графики (Chart.js)
+   
+   **Модульная структура JavaScript:**
+   ```javascript
+   const Utils = {
+       formatDate(dateString) { ... },
+       debounce(func, wait) { ... },
+       showToast(message, type) { ... },
+       showSkeleton(containerId, count) { ... }
+   };
+   
+   const API = {
+       async request(endpoint, options) { ... },
+       getUsers(params) { ... },
+       updateUserRole(userId, role) { ... }
+   };
+   ```
+   
+   **UI Features:**
+   - Skeleton loading при загрузке
+   - Fade transitions между tabs
+   - Toast notifications
+   - Modal dialogs с glassmorphism
+   - Responsive design (mobile-first)
+   - Темная тема support
+
+**Best practices:**
+- ✅ Один admin session = 1 час TTL
+- ✅ Prefix `admin_session:` в Redis (изоляция от `qr_session:`)
+- ✅ Проверка прав на каждом endpoint
+- ✅ Timezone-aware datetime (Europe/Moscow)
+- ✅ SubscriptionHistory для аудита изменений
+
+### UI/UX Best Practices для Telegram Mini Apps
+
+**1. Темная тема support (обязательно!)**
+```javascript
+// Автоматическое определение темы
+function applyTelegramTheme() {
+    const isDark = tg.colorScheme === 'dark';
+    
+    if (isDark) {
+        document.documentElement.classList.add('dark');
+    } else {
+        document.documentElement.classList.remove('dark');
+    }
+}
+
+// Применяем при загрузке
+applyTelegramTheme();
+
+// Отслеживаем изменения
+tg.onEvent('themeChanged', () => {
+    applyTelegramTheme();
+});
+```
+
+**CSS для темной темы:**
+```css
+/* Используйте Tailwind dark: модификатор */
+.dark .modal-content {
+    background: var(--tg-theme-secondary-bg-color, #1c1c1c);
+    color: var(--tg-theme-text-color, #fff);
+}
+
+.dark .form-group input,
+.dark .form-group select {
+    background: var(--tg-theme-secondary-bg-color, #2c2c2c);
+    color: #fff;
+    border-color: rgba(255, 255, 255, 0.1);
+}
+```
+
+**2. Tailwind CSS интеграция**
+```html
+<!-- Всегда используйте Tailwind через CDN -->
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+    tailwind.config = {
+        darkMode: 'class',
+        theme: {
+            extend: {
+                colors: {
+                    'tg-bg': 'var(--tg-theme-bg-color)',
+                    'tg-text': 'var(--tg-theme-text-color)',
+                    'tg-hint': 'var(--tg-theme-hint-color)',
+                    'tg-button': 'var(--tg-theme-button-color)',
+                }
+            }
+        }
+    }
+</script>
+```
+
+**3. Telegram WebApp API**
+```javascript
+const tg = window.Telegram.WebApp;
+
+// Обязательно при инициализации
+tg.ready();
+tg.expand();
+
+// Настройка темы
+if (tg.setHeaderColor) {
+    tg.setHeaderColor('bg_color');
+}
+
+// Открытие ссылок в Telegram
+tg.openTelegramLink('tg://login?token=...');
+
+// Alerts
+tg.showAlert('✅ Успешно!', () => {
+    tg.close();
+});
+
+// Confirm
+tg.showConfirm('Вы уверены?', (confirmed) => {
+    if (confirmed) { ... }
+});
+```
+
+**4. Skeleton Loading (обязательно)**
+```javascript
+// Показывайте skeleton вместо spinner
+const Utils = {
+    showSkeleton(containerId, count = 3) {
+        const html = Array(count).fill('').map(() => `
+            <div class="bg-white dark:bg-gray-800 rounded-xl p-4 shadow-md mb-3">
+                <div class="flex items-center space-x-3">
+                    <div class="skeleton skeleton-avatar"></div>
+                    <div class="flex-1">
+                        <div class="skeleton skeleton-title"></div>
+                        <div class="skeleton skeleton-text"></div>
+                    </div>
+                </div>
+            </div>
+        `).join('');
+        
+        document.getElementById(containerId).innerHTML = html;
+    }
+};
+
+// CSS
+.skeleton {
+    background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+    background-size: 200% 100%;
+    animation: loading 1.5s infinite;
+}
+```
+
+**5. Градиенты и анимации**
+```css
+/* Градиентные карточки (БЕЗ постоянной анимации) */
+.stat-card {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    /* НЕ добавляйте animation: gradientShift - раздражает! */
+}
+
+/* Плавные hover эффекты */
+.card {
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
+}
+
+/* Ripple эффект для кнопок */
+.btn::after {
+    content: '';
+    position: absolute;
+    background: rgba(255, 255, 255, 0.4);
+    border-radius: 50%;
+    transition: width 0.6s, height 0.6s;
+}
+
+.btn:active::after {
+    width: 300px;
+    height: 300px;
+}
+```
+
+**6. Error Handling в API вызовах**
+```javascript
+// Всегда проверяйте response.ok
+async function saveChanges() {
+    try {
+        const response = await fetch('/api/admin/user/1/role', {
+            method: 'POST',
+            body: JSON.stringify({ role: 'admin' })
+        });
+        
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || `HTTP ${response.status}`);
+        }
+        
+        const data = await response.json();
+        Utils.showToast('✅ Сохранено!', 'success');
+        
+    } catch (error) {
+        console.error('Error:', error);
+        tg.showAlert(`❌ Ошибка: ${error.message}`);
+    }
+}
+```
+
+**7. Responsive Design**
+```css
+/* Mobile-first подход */
+.grid {
+    display: grid;
+    grid-template-columns: 1fr; /* По умолчанию 1 колонка */
+    gap: 12px;
+}
+
+@media (min-width: 768px) {
+    .grid {
+        grid-template-columns: repeat(3, 1fr); /* 3 колонки на планшетах */
+    }
+}
+```
+
+### Redis интеграция (важно!)
+
+**Используется для:**
+
+1. **QR Sessions** (между telethon-bot и telethon)
+   ```python
+   # Prefix: qr_session:{session_id}
+   redis_client.setex(
+       f"qr_session:{session_id}",
+       600,  # 10 минут
+       json.dumps(session_data)
+   )
+   ```
+
+2. **Admin Sessions**
+   ```python
+   # Prefix: admin_session:{token}
+   redis_client.setex(
+       f"admin_session:{token}",
+       3600,  # 1 час
+       json.dumps(admin_data)
+   )
+   ```
+
+3. **Embeddings Cache**
+   ```python
+   # Prefix: embedding:{hash}
+   redis_client.setex(
+       f"embedding:{text_hash}",
+       86400,  # 24 часа
+       json.dumps(embedding)
+   )
+   ```
+
+4. **Rate Limiting**
+   ```python
+   # Prefix: rate:{user_id}:{endpoint}
+   current = redis_client.incr(f"rate:{user_id}:rag_query")
+   if current == 1:
+       redis_client.expire(f"rate:{user_id}:rag_query", 60)
+   ```
+
+**Подключение:**
+```python
+import redis
+
+# БЕЗ пароля (Valkey default)
+redis_client = redis.Redis(
+    host=os.getenv("REDIS_HOST", "redis"),
+    port=int(os.getenv("REDIS_PORT", 6379)),
+    decode_responses=True
+)
+
+# Проверка подключения
+redis_client.ping()
+```
+
+**Best practices:**
+- ✅ Всегда используйте prefixes для изоляции (qr_session:, admin_session:)
+- ✅ Устанавливайте TTL для всех ключей
+- ✅ decode_responses=True для работы с JSON
+- ✅ Graceful fallback если Redis недоступен
+
+### PostgreSQL интеграция (обязательно!)
+
+**ВАЖНО: ТОЛЬКО PostgreSQL, БЕЗ SQLite fallback!**
+
+```python
+# database.py
+def get_database_url() -> str:
+    """
+    Получить URL базы данных
+    
+    ВАЖНО: ТОЛЬКО PostgreSQL (Supabase)
+    НЕ используйте SQLite даже как fallback!
+    """
+    database_url = os.getenv("TELEGRAM_DATABASE_URL")
+    
+    if not database_url:
+        raise ValueError(
+            "TELEGRAM_DATABASE_URL не установлен!\n"
+            "Должен быть: postgresql://postgres:password@db:5432/postgres"
+        )
+    
+    if "sqlite" in database_url.lower():
+        raise ValueError(
+            "SQLite НЕ поддерживается!\n"
+            "Используйте только PostgreSQL (Supabase)"
+        )
+    
+    return database_url
+
+# Connection pooling
+engine = create_engine(
+    get_database_url(),
+    pool_size=20,
+    max_overflow=10,
+    pool_pre_ping=True
+)
+```
+
+**Timezone handling (критично!):**
+```python
+from datetime import datetime, timezone
+
+# ✅ Всегда timezone-aware
+now = datetime.now(timezone.utc)
+user.created_at = datetime.now(timezone.utc)
+
+# При сравнении с БД:
+if expires.tzinfo is None:
+    expires = expires.replace(tzinfo=timezone.utc)
+
+# Для отображения пользователю:
+from zoneinfo import ZoneInfo
+LOCAL_TZ = ZoneInfo('Europe/Moscow')
+local_time = utc_time.astimezone(LOCAL_TZ)
+```
+
+**Миграции:**
+```python
+# scripts/migrations/add_roles_and_subscriptions.py
+def get_database_url() -> str:
+    url = os.getenv("TELEGRAM_DATABASE_URL")
+    
+    if not url or "sqlite" in url.lower():
+        raise ValueError("Только PostgreSQL поддерживается!")
+    
+    return url
+
+# Используйте TIMESTAMP для PostgreSQL
+def create_tables():
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS invite_codes (
+            code VARCHAR PRIMARY KEY,
+            expires_at TIMESTAMP NOT NULL,  -- TIMESTAMP для PostgreSQL!
+            ...
+        )
+    """)
+```
+
+### Команды бота - актуализация
+
+**`/start` команда:**
+```python
+# Для новых пользователей
+"""
+🤖 Добро пожаловать!
+
+🎫 Для начала работы нужен инвайт код
+
+📱 Авторизация (QR код - БЕЗ SMS!):
+/login INVITE_CODE
+
+✨ Процесс: 30 секунд
+1️⃣ Отправьте /login с кодом
+2️⃣ Нажмите кнопку QR
+3️⃣ Отсканируйте или используйте ссылку
+4️⃣ Подтвердите в Telegram
+5️⃣ Готово!
+"""
+
+# Для авторизованных пользователей
+"""
+🤖 С возвращением, {name}! {role_badge}
+
+✅ Статус: Авторизован
+💎 Подписка: {subscription_type}
+
+📋 Управление каналами:
+/add_channel - Добавить канал
+/my_channels - Ваши каналы ({count}/{max})
+
+🤖 RAG & AI:
+/ask, /search, /recommend, /digest
+
+{admin_commands if is_admin}  # Показывается только админам!
+"""
+```
+
+**`/help` команда:**
+```python
+# Базовые команды для всех
+"""
+🤖 Telegram Channel Parser Bot - Справка
+
+🔐 Аутентификация:
+/login INVITE_CODE - QR авторизация
+
+📋 Управление каналами:
+/add_channel, /my_channels, /remove_channel
+
+🤖 RAG & AI:
+/ask <вопрос>, /search <запрос>, /recommend, /digest
+
+💎 Подписка:
+/subscription
+"""
+
+# Админские команды (только для role="admin")
+"""
+👑 КОМАНДЫ АДМИНИСТРАТОРА:
+
+📱 Админ панель (рекомендуется):
+/admin - Открыть Admin Panel Mini App
+
+📝 Текстовые команды:
+/admin_invite, /admin_users, /admin_grant, /admin_stats
+
+💡 Рекомендация: Используйте /admin для удобства
+"""
+```
+
+### Troubleshooting - Новые проблемы
+
+**QR Login не работает:**
+```bash
+# 1. Проверьте Redis подключение
+docker logs telethon | grep "QRAuthManager"
+# Должно быть: ✅ QRAuthManager подключен к Redis
+
+# 2. Проверьте session в Redis
+docker exec redis redis-cli KEYS "qr_session:*"
+
+# 3. Проверьте логи polling
+docker logs telethon | grep "poll_authorization"
+```
+
+**Admin Panel не открывается:**
+```bash
+# 1. Проверьте роль пользователя
+docker exec supabase-db psql -U postgres -d postgres \
+  -c "SELECT telegram_id, role FROM users WHERE telegram_id=YOUR_ID;"
+
+# 2. Проверьте admin session в Redis
+docker exec redis redis-cli GET "admin_session:YOUR_TOKEN"
+
+# 3. Проверьте Caddy routing
+docker logs caddy | grep "admin-panel"
+```
+
+**Подписка не меняется:**
+```bash
+# 1. Проверьте логи backend
+docker logs telethon | grep "subscription"
+
+# 2. Проверьте SubscriptionHistory таблицу
+docker exec supabase-db psql -U postgres -d postgres \
+  -c "SELECT * FROM subscription_history ORDER BY changed_at DESC LIMIT 5;"
+
+# 3. Проверьте Frontend errors
+# Откройте консоль браузера в Mini App (F12)
+# Ищите: "Error saving changes:"
+```
+
+**Темная тема не работает:**
+```javascript
+// Проверьте в консоли Mini App:
+console.log('Telegram colorScheme:', tg.colorScheme);
+console.log('HTML has dark class:', document.documentElement.classList.contains('dark'));
+
+// Должно быть:
+// colorScheme: 'dark'
+// dark class: true
+```
+
+### Важные ограничения и правила
+
+**1. ВСЕГДА используйте Context7 перед реализацией:**
+```python
+# Пример: Добавление новой функции
+# 1. Ищите решения через Context7:
+#    - "Telegram Mini Apps dark theme best practices"
+#    - "FastAPI Redis session management"
+#    - "SQLAlchemy timezone aware datetime"
+# 2. Изучайте примеры и документацию
+# 3. Применяйте best practices из Context7
+```
+
+**2. PostgreSQL и Redis обязательны:**
+```python
+# ✅ Правильно
+if not os.getenv("TELEGRAM_DATABASE_URL"):
+    raise ValueError("PostgreSQL required!")
+
+redis_client = redis.Redis(host='redis', port=6379)
+
+# ❌ Неправильно
+db_url = os.getenv("DATABASE_URL", "sqlite:///fallback.db")  # НЕТ!
+```
+
+**3. Timezone handling критично:**
+```python
+# ✅ Всегда UTC в БД, Europe/Moscow для display
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+
+# Сохраняем в БД
+user.created_at = datetime.now(timezone.utc)
+
+# Показываем пользователю
+LOCAL_TZ = ZoneInfo('Europe/Moscow')
+display_time = user.created_at.astimezone(LOCAL_TZ)
+
+# Сравнение
+if expires.tzinfo is None:
+    expires = expires.replace(tzinfo=timezone.utc)
+if datetime.now(timezone.utc) > expires:
+    # expired
+```
+
+**4. Mini App обязательно с темной темой:**
+```javascript
+// ВСЕГДА добавляйте applyTelegramTheme()
+// ВСЕГДА используйте Tailwind dark: классы
+// ВСЕГДА тестируйте в обеих темах
+```
+
+**5. Admin operations с SubscriptionHistory:**
+```python
+# При изменении подписки ВСЕГДА создавайте запись:
+from models import SubscriptionHistory
+
+# Получаем admin.id из telegram_id
+admin_user = db.query(User).filter(User.telegram_id == admin_id).first()
+
+history = SubscriptionHistory(
+    user_id=user.id,
+    action="upgraded",  # created/upgraded/downgraded/renewed
+    old_type=old_subscription,
+    new_type=new_subscription,
+    changed_by=admin_user.id,  # user.id админа, НЕ telegram_id!
+    notes=f"Admin panel: manual change"
+)
+db.add(history)
+```
+
+### Caddy routing для Mini Apps
+
+```nginx
+{$TELEGRAM_AUTH_HOSTNAME:telegram-auth.produman.studio} {
+    # Admin Panel Mini App
+    reverse_proxy /admin-panel* telethon:8010
+    reverse_proxy /api/admin/* telethon:8010
+    
+    # QR Auth Mini App
+    reverse_proxy /qr-auth* telethon:8010
+    
+    # OAuth web server (legacy)
+    reverse_proxy telethon:8001
+}
+```
+
+**Best practices:**
+- ✅ Все Mini Apps через HTTPS (обязательно для WebAppInfo)
+- ✅ Разные URL paths для разных Mini Apps
+- ✅ API endpoints под тем же доменом (CORS)
+
+### Файловая структура - обновления
+
+**Новые файлы v3.1:**
+```
+telethon/
+├── qr_auth_manager.py              # QR Login менеджер (NEW)
+├── admin_panel_manager.py          # Admin Panel sessions (NEW)
+├── bot_login_handlers_qr.py        # QR Login ConversationHandler (NEW)
+├── bot_login_handlers_sms_deprecated.py  # Старый SMS login (DEPRECATED)
+├── subscription_config.py          # Subscription tiers (NEW)
+├── shared_auth_manager.py          # Telethon клиенты с master credentials
+├── models.py                       # +InviteCode, +SubscriptionHistory
+├── main.py                         # +Admin Panel endpoints, +QR endpoints
+└── docs/
+    ├── quickstart/
+    │   ├── QR_LOGIN_GUIDE.md       # Гайд по QR логину (NEW)
+    │   └── ADMIN_PANEL_QUICKSTART.md  # Гайд по админ панели (NEW)
+    └── archive/
+        └── reports/
+            ├── ADMIN_PANEL_UI_ENHANCEMENTS.md  # Отчет по UI (NEW)
+            └── QR_LOGIN_FINAL_SUMMARY.md       # Отчет по QR (NEW)
+```
+
+### Версионирование
+
+**Текущая версия:** 3.1  
+**Дата:** 12 октября 2025
+
+**Changelog:**
+- ✅ QR Login система (без SMS кодов)
+- ✅ Admin Panel через Telegram Mini App
+- ✅ Система ролей (admin/user)
+- ✅ Subscription tiers (5 уровней)
+- ✅ Invite codes система
+- ✅ UI улучшения (Tailwind, градиенты, темная тема)
+- ✅ Redis интеграция для shared state
+- ✅ PostgreSQL only (удален SQLite fallback)
+- ✅ Timezone-aware datetime везде
+- ✅ Skeleton loading и UX improvements
+- ✅ Модульная структура JavaScript (Utils, API modules)
+
+---
+
+**Версия правил:** 3.1  
+**Последнее обновление:** 12 октября 2025  
+**Проект:** n8n-server / Telegram Channel Parser + RAG System + QR Login + Admin Panel

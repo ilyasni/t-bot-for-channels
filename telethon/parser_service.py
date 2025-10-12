@@ -6,7 +6,8 @@ import re
 from datetime import datetime, timezone, timedelta
 from database import SessionLocal
 from models import Channel, Post, User
-from auth import get_authenticated_users, get_user_client, cleanup_inactive_clients
+from auth import get_authenticated_users, cleanup_inactive_clients
+from shared_auth_manager import shared_auth_manager
 from telethon.errors import FloodWaitError
 import logging
 from typing import List
@@ -72,22 +73,10 @@ class ParserService:
         """Парсить каналы конкретного пользователя"""
         client = None
         try:
-            # Получаем клиент пользователя
-            # Важно: клиент должен быть создан в текущем event loop
-            from secure_auth_manager import secure_auth_manager
+            # Получаем клиент пользователя через shared_auth_manager
+            # Важно: клиент создается с мастер credentials
+            client = await shared_auth_manager.get_user_client(user.telegram_id)
             
-            # Очищаем старый клиент если есть (может быть из другого event loop)
-            if user.id in secure_auth_manager.active_clients:
-                old_client = secure_auth_manager.active_clients[user.id]
-                try:
-                    if old_client.is_connected():
-                        await old_client.disconnect()
-                except:
-                    pass
-                del secure_auth_manager.active_clients[user.id]
-            
-            # Создаем новый клиент в текущем event loop
-            client = await get_user_client(user)
             if not client:
                 logger.warning(f"⚠️ ParserService: Не удалось получить клиент для пользователя {user.telegram_id}")
                 return 0
