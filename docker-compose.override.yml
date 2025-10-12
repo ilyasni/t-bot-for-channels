@@ -38,9 +38,9 @@ services:
       - TAGGING_PROVIDER=${TAGGING_PROVIDER:-gigachat}
       - TAGGING_FALLBACK_OPENROUTER=${TAGGING_FALLBACK_OPENROUTER:-true}
       - GIGACHAT_PROXY_URL=http://gpt2giga-proxy:8090
-      - GIGACHAT_MODEL=${GIGACHAT_MODEL:-GigaChat-Lite}
+      - GIGACHAT_MODEL=${GIGACHAT_MODEL:-GigaChat}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
-      - OPENROUTER_MODEL=${OPENROUTER_MODEL:-google/gemini-2.0-flash-exp:free}
+      - OPENROUTER_MODEL=${OPENROUTER_MODEL:-deepseek/deepseek-chat-v3.1:free}
       # Часовой пояс
       - TZ=Europe/Moscow
     restart: unless-stopped
@@ -118,7 +118,7 @@ services:
       - QDRANT_API_KEY=${QDRANT_API_KEY}
       - QDRANT_EXTERNAL_URL=https://qdrant.produman.studio
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
-      - OPENROUTER_MODEL=${OPENROUTER_MODEL:-google/gemini-2.0-flash-exp:free}
+      - OPENROUTER_MODEL=${OPENROUTER_MODEL:-deepseek/deepseek-chat-v3.1:free}
       - GIGACHAT_PROXY_URL=http://gpt2giga-proxy:8090
       - GIGACHAT_ENABLED=true
       - BOT_TOKEN=${BOT_TOKEN}
