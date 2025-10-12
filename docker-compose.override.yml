@@ -24,12 +24,16 @@ services:
       - HOST=0.0.0.0
       - PORT=8010
       - PARSER_INTERVAL_MINUTES=30
-      # База данных - по умолчанию SQLite, можно переопределить на PostgreSQL
-      - DATABASE_URL=${TELEGRAM_DATABASE_URL:-sqlite:///./data/telethon_bot.db}
+      # База данных - ТОЛЬКО PostgreSQL (Supabase)
+      - TELEGRAM_DATABASE_URL=${TELEGRAM_DATABASE_URL}
       # Telegram Bot Token
       - BOT_TOKEN=${BOT_TOKEN}
       # Ключ шифрования (общий для всего проекта)
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      # Master credentials для упрощенной авторизации
+      - MASTER_API_ID=${MASTER_API_ID}
+      - MASTER_API_HASH=${MASTER_API_HASH}
+      - ADMIN_TELEGRAM_IDS=${ADMIN_TELEGRAM_IDS}
       # Система хранения постов
       - DEFAULT_RETENTION_DAYS=${DEFAULT_RETENTION_DAYS:-30}
       - CLEANUP_SCHEDULE_TIME=${CLEANUP_SCHEDULE_TIME:-03:00}
@@ -41,6 +45,12 @@ services:
       - GIGACHAT_MODEL=${GIGACHAT_MODEL:-GigaChat}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
       - OPENROUTER_MODEL=${OPENROUTER_MODEL:-deepseek/deepseek-chat-v3.1:free}
+      # Base URL для Mini App (QR авторизация)
+      - AUTH_BASE_URL=${AUTH_BASE_URL:-https://telegram-auth.produman.studio}
+      # Redis (для QR сессий shared между контейнерами)
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      # REDIS_PASSWORD не установлен - Valkey без пароля
       # Часовой пояс
       - TZ=Europe/Moscow
     restart: unless-stopped
@@ -65,12 +75,22 @@ services:
       # Монтируем .env файл
       - ./telethon/.env:/app/.env
     environment:
-      # База данных - по умолчанию SQLite, можно переопределить на PostgreSQL
-      - DATABASE_URL=${TELEGRAM_DATABASE_URL:-sqlite:///./data/telethon_bot.db}
+      # База данных - ТОЛЬКО PostgreSQL (Supabase)
+      - TELEGRAM_DATABASE_URL=${TELEGRAM_DATABASE_URL}
       # Telegram Bot Token
       - BOT_TOKEN=${BOT_TOKEN}
       # Ключ шифрования (общий для всего проекта)
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      # Master credentials для упрощенной авторизации
+      - MASTER_API_ID=${MASTER_API_ID}
+      - MASTER_API_HASH=${MASTER_API_HASH}
+      - ADMIN_TELEGRAM_IDS=${ADMIN_TELEGRAM_IDS}
+      # Base URL для Mini App (QR авторизация)
+      - AUTH_BASE_URL=${AUTH_BASE_URL:-https://telegram-auth.produman.studio}
+      # Redis (для QR сессий shared между контейнерами)
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      # REDIS_PASSWORD не установлен - Valkey без пароля
     restart: unless-stopped
     networks:
       - localai_default
@@ -113,7 +133,7 @@ services:
     environment:
       - HOST=0.0.0.0
       - PORT=8020
-      - DATABASE_URL=${TELEGRAM_DATABASE_URL:-sqlite:///./data/telethon_bot.db}
+      - TELEGRAM_DATABASE_URL=${TELEGRAM_DATABASE_URL}
       - QDRANT_URL=http://qdrant:6333
       - QDRANT_API_KEY=${QDRANT_API_KEY}
       - QDRANT_EXTERNAL_URL=https://qdrant.produman.studio

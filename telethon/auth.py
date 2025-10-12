@@ -89,14 +89,22 @@ async def logout_user(user: User):
         user: Объект пользователя из БД
     """
     try:
+        # ВАЖНО: Используем shared_auth_manager (новая QR система)
+        # Ключ - telegram_id, НЕ user.id
+        from shared_auth_manager import shared_auth_manager
+        
+        telegram_id = user.telegram_id
+        
         # Отключаем клиент если активен
-        if user.id in secure_auth_manager.active_clients:
-            client = secure_auth_manager.active_clients[user.id]
+        if telegram_id in shared_auth_manager.active_clients:
+            client = shared_auth_manager.active_clients[telegram_id]
             if client.is_connected():
                 await client.disconnect()
-            del secure_auth_manager.active_clients[user.id]
+                logger.info(f"🔌 Клиент {telegram_id} отключен")
+            del shared_auth_manager.active_clients[telegram_id]
+            logger.info(f"🗑️ Клиент {telegram_id} удален из памяти")
         
-        # Очищаем сессию аутентификации
+        # Очищаем сессию аутентификации (старая система)
         if user.auth_session_id:
             if user.auth_session_id in secure_auth_manager.auth_sessions:
                 del secure_auth_manager.auth_sessions[user.auth_session_id]
