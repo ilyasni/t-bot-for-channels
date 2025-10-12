@@ -26,14 +26,14 @@ class TaggingService:
         
         # OpenRouter настройки
         self.openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
-        self.openrouter_model = os.getenv("OPENROUTER_MODEL", "google/gemini-2.0-flash-exp:free")
+        self.openrouter_model = os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-chat-v3.1:free")
         self.openrouter_url = "https://openrouter.ai/api/v1/chat/completions"
         
         # GigaChat настройки (через gpt2giga-proxy)
         self.gigachat_proxy_url = os.getenv("GIGACHAT_PROXY_URL", "http://gpt2giga-proxy:8090")
         self.gigachat_url = f"{self.gigachat_proxy_url}/v1/chat/completions"
-        # GigaChat Lite оптимален для тегирования: быстрее, дешевле, выше лимиты
-        self.gigachat_model = os.getenv("GIGACHAT_MODEL", "GigaChat-Lite")
+        # GigaChat оптимален для тегирования: быстрее, дешевле, выше лимиты
+        self.gigachat_model = os.getenv("GIGACHAT_MODEL", "GigaChat")
         
         # Выбираем API в зависимости от провайдера
         if self.provider == "gigachat":
@@ -52,10 +52,10 @@ class TaggingService:
         
         # Fallback модели (только для OpenRouter)
         self.fallback_models = [
-            "google/gemini-2.0-flash-exp:free",
-            "meta-llama/llama-3.2-3b-instruct:free",
-            "qwen/qwen-2-7b-instruct:free",
-            "google/gemma-2-9b-it:free"
+            "deepseek/deepseek-chat-v3.1:free",
+            "meta-llama/llama-4-maverick:free",
+            "z-ai/glm-4.5-air:free",
+            "qwen/qwen-2.5-72b-instruct:free"
         ]
         
         # Retry настройки
@@ -69,12 +69,13 @@ class TaggingService:
             self.enabled = True
             logger.info(f"✅ TaggingService: Основной провайдер - GigaChat (через {self.gigachat_proxy_url})")
             logger.info(f"💡 TaggingService: Используется модель {self.model}")
-            if self.model == "GigaChat-Lite":
-                logger.info("⚡ GigaChat-Lite: быстрая модель с высокими лимитами - оптимально для тегирования")
+            if self.model == "GigaChat":
+                logger.info("⚡ GigaChat: быстрая модель с высокими лимитами - оптимально для тегирования")
             
             # Проверяем доступность fallback на OpenRouter
             if self.fallback_to_openrouter and self.openrouter_api_key and self.openrouter_api_key != "your_openrouter_api_key_here":
                 logger.info(f"🔄 Fallback: OpenRouter ({self.openrouter_model}) - используется при ошибках GigaChat")
+                logger.info(f"   Дополнительные fallback модели: {len(self.fallback_models)} шт.")
             elif self.fallback_to_openrouter:
                 logger.warning("⚠️ Fallback на OpenRouter включен, но OPENROUTER_API_KEY не установлен")
                 
@@ -151,10 +152,14 @@ class TaggingService:
             logger.info(f"🔄 TaggingService: Попытка {retry_count + 1}, используем fallback модель: {current_model}")
         
         try:
-            prompt = f"""Проанализируй следующий текст и определи 3-7 релевантных тегов для классификации.
+            prompt = f"""Задача: КЛАССИФИКАЦИЯ существующего текста тегами.
 
-Текст:
+ВАЖНО: Ты НЕ создаёшь новый контент, а только анализируешь СУЩЕСТВУЮЩИЙ текст для поиска и классификации информации.
+
+Текст для классификации:
 {text[:2000]}
+
+Определи 3-7 релевантных тегов для классификации этого СУЩЕСТВУЮЩЕГО контента.
 
 Требования к тегам:
 - Теги должны быть на русском языке
@@ -262,6 +267,36 @@ class TaggingService:
                         return await self.generate_tags_for_text(text, retry_count=0, use_fallback=True)
                     
                     return None
+                
+                # ДЕТЕКЦИЯ ОТКАЗА GIGACHAT ПО КОНТЕНТУ
+                # GigaChat может отказать обрабатывать спорный контент, возвращая 200 OK но текстовое сообщение
+                gigachat_refusal_phrases = [
+                    "чувствительными темами",
+                    "временно ограничены",
+                    "некорректные ответы",
+                    "неправильного толкования",
+                    "генеративные языковые модели могут создавать"
+                ]
+                
+                # Проверяем наличие фраз отказа в контенте
+                has_refusal = any(phrase in content for phrase in gigachat_refusal_phrases)
+                
+                if current_provider == "gigachat" and has_refusal:
+                    logger.warning(f"⚠️ TaggingService: GigaChat отказался обработать контент (фильтр безопасности)")
+                    logger.error(f"Полный оригинальный ответ: {content[:500]}")
+                    
+                    # Прямой fallback на OpenRouter
+                    if not use_fallback and self.fallback_to_openrouter:
+                        if self.openrouter_api_key and self.openrouter_api_key != "your_openrouter_api_key_here":
+                            logger.warning("⚠️ GigaChat отказал по фильтру контента, переключаемся на OpenRouter")
+                            return await self.generate_tags_for_text(text, retry_count=0, use_fallback=True)
+                        else:
+                            logger.warning("⚠️ Fallback на OpenRouter недоступен (нет API ключа)")
+                            return None
+                    else:
+                        # Уже на fallback или fallback отключен
+                        logger.warning("⚠️ Отказ GigaChat, но fallback недоступен (уже используется или отключен)")
+                        return None
                 
                 # Сохраняем оригинальный ответ для логирования
                 original_content = content
@@ -437,10 +472,17 @@ class TaggingService:
                 logger.info(f"✅ TaggingService: Пост {post_id} обновлен с тегами: {tags}")
                 return True
             else:
-                post.tagging_status = "failed" if post.tagging_attempts >= self.max_retry_attempts else "retrying"
-                post.tagging_error = "Failed to generate tags"
+                # Проверяем достигнут ли лимит попыток
+                if post.tagging_attempts >= self.max_retry_attempts:
+                    post.tagging_status = "skipped"  # Было: "failed"
+                    post.tagging_error = "Content rejected by all providers (filters)"
+                    logger.info(f"⏸️ TaggingService: Пост {post_id} пропущен после {post.tagging_attempts} попыток (фильтры контента)")
+                else:
+                    post.tagging_status = "retrying"
+                    post.tagging_error = "Failed to generate tags"
+                    logger.warning(f"⚠️ TaggingService: Не удалось сгенерировать теги для поста {post_id} (попытка {post.tagging_attempts})")
+                
                 db.commit()
-                logger.warning(f"⚠️ TaggingService: Не удалось сгенерировать теги для поста {post_id} (попытка {post.tagging_attempts})")
                 return False
                 
         except Exception as e:
@@ -449,8 +491,12 @@ class TaggingService:
             try:
                 post = db.query(Post).filter(Post.id == post_id).first()
                 if post:
-                    post.tagging_status = "failed" if post.tagging_attempts >= self.max_retry_attempts else "retrying"
-                    post.tagging_error = str(e)[:500]
+                    if post.tagging_attempts >= self.max_retry_attempts:
+                        post.tagging_status = "skipped"  # Было: "failed"
+                        post.tagging_error = f"Error after {post.tagging_attempts} attempts: {str(e)[:400]}"
+                    else:
+                        post.tagging_status = "retrying"
+                        post.tagging_error = str(e)[:500]
                     db.commit()
             except:
                 pass
