@@ -121,6 +121,7 @@ services:
       - OPENROUTER_MODEL=${OPENROUTER_MODEL:-google/gemini-2.0-flash-exp:free}
       - GIGACHAT_PROXY_URL=http://gpt2giga-proxy:8090
       - GIGACHAT_ENABLED=true
+      - BOT_TOKEN=${BOT_TOKEN}
       - EMBEDDING_MAX_TOKENS_GIGACHAT=1536
       - EMBEDDING_OVERLAP_TOKENS_GIGACHAT=256
       - RAG_TOP_K=10
