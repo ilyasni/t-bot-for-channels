@@ -1,5 +1,8 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
+from telegram.ext import (
+    Application, CommandHandler, MessageHandler, CallbackQueryHandler, 
+    ContextTypes, filters, PicklePersistence
+)
 from sqlalchemy.orm import Session
 from database import get_db, SessionLocal
 from models import User, Channel, Post
@@ -14,19 +17,52 @@ import httpx
 import asyncio
 from dotenv import load_dotenv
 
-logging.basicConfig(level=logging.INFO)
+# Импорты новых модулей
+from bot_login_handlers_qr import get_login_conversation_handler, subscription_command
+from bot_admin_handlers import (
+    admin_invite_command, admin_users_command, admin_user_command,
+    admin_grant_command, admin_stats_command, get_admin_callback_handler,
+    admin_panel_command
+)
+from bot_debug_commands import (
+    debug_test_phone_command, debug_check_sessions_command, debug_force_auth_command,
+    debug_reset_auth_command, debug_delete_user_command
+)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 load_dotenv()
+
+# DEBUG логи для отладки (управляется через переменную окружения)
+# Установите DEBUG_LOGS=true в .env для включения детальных логов
+if os.getenv('DEBUG_LOGS', 'false').lower() == 'true':
+    logger.info("🐛 DEBUG логи включены (telegram.ext, ConversationHandler, httpx)")
+    logging.getLogger('telegram.ext.ConversationHandler').setLevel(logging.DEBUG)
+    logging.getLogger('telegram.ext').setLevel(logging.DEBUG)
+    logging.getLogger('telethon').setLevel(logging.DEBUG)
+    logging.getLogger('httpx').setLevel(logging.DEBUG)
+else:
+    # По умолчанию - только WARNING для библиотек
+    logging.getLogger('telegram.ext').setLevel(logging.WARNING)
+    logging.getLogger('telethon').setLevel(logging.WARNING)
+    logging.getLogger('httpx').setLevel(logging.WARNING)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 class TelegramBot:
     def __init__(self):
-        # Создаем application с явным указанием получаемых updates
+        # Создаем persistence для сохранения состояний
+        persistence = PicklePersistence(filepath='data/bot_persistence.pkl')
+        
+        # Создаем application с persistence
         self.application = (
             Application.builder()
             .token(BOT_TOKEN)
+            .persistence(persistence)
             .build()
         )
         self.setup_handlers()
@@ -35,7 +71,7 @@ class TelegramBot:
         # Таймаут для состояний (30 минут)
         self.state_timeout = 30 * 60  # 30 минут в секундах
         
-        logger.info("✅ TelegramBot инициализирован с поддержкой всех типов updates")
+        logger.info("✅ TelegramBot инициализирован с Persistence и поддержкой всех типов updates")
     
     def _cleanup_expired_states(self):
         """Очистка устаревших состояний пользователей"""
@@ -159,6 +195,10 @@ class TelegramBot:
         """Настройка обработчиков команд"""
         logger.info("🔧 Настройка обработчиков команд...")
         
+        # ✅ НОВОЕ: ConversationHandler для /login (должен быть первым!)
+        self.application.add_handler(get_login_conversation_handler())
+        logger.info("  ✅ ConversationHandler для /login зарегистрирован")
+        
         # Основные команды
         self.application.add_handler(CommandHandler("start", self.start_command))
         self.application.add_handler(CommandHandler("auth", self.auth_command))
@@ -171,17 +211,42 @@ class TelegramBot:
         self.application.add_handler(CommandHandler("remove_channel", self.remove_channel_command))
         self.application.add_handler(CommandHandler("help", self.help_command))
         
+        # ✅ НОВОЕ: Команда для просмотра подписки
+        self.application.add_handler(CommandHandler("subscription", subscription_command))
+        
+        # ✅ НОВОЕ: Админ команды
+        self.application.add_handler(CommandHandler("admin", admin_panel_command))  # Mini App панель
+        self.application.add_handler(CommandHandler("admin_invite", admin_invite_command))
+        self.application.add_handler(CommandHandler("admin_users", admin_users_command))
+        self.application.add_handler(CommandHandler("admin_user", admin_user_command))
+        self.application.add_handler(CommandHandler("admin_grant", admin_grant_command))
+        self.application.add_handler(CommandHandler("admin_stats", admin_stats_command))
+        
+        # ✅ НОВОЕ: Debug команды
+        self.application.add_handler(CommandHandler("debug_status", self.debug_status_command))
+        self.application.add_handler(CommandHandler("debug_unblock", self.debug_unblock_command))
+        self.application.add_handler(CommandHandler("debug_reset", self.debug_reset_command))
+        self.application.add_handler(CommandHandler("debug_test_phone", debug_test_phone_command))
+        self.application.add_handler(CommandHandler("debug_check_sessions", debug_check_sessions_command))
+        self.application.add_handler(CommandHandler("debug_force_auth", debug_force_auth_command))
+        self.application.add_handler(CommandHandler("debug_reset_auth", debug_reset_auth_command))
+        self.application.add_handler(CommandHandler("debug_delete_user", debug_delete_user_command))
+        logger.info("  ✅ Админ и Debug команды зарегистрированы")
+        
         # RAG команды
         self.application.add_handler(CommandHandler("ask", self.ask_command))
         self.application.add_handler(CommandHandler("search", self.search_command))
         self.application.add_handler(CommandHandler("recommend", self.recommend_command))
         self.application.add_handler(CommandHandler("digest", self.digest_command))
         
-        # Callback и текстовые сообщения
+        # Callback handlers
+        self.application.add_handler(get_admin_callback_handler())  # ✅ НОВОЕ: Админ callbacks
         self.application.add_handler(CallbackQueryHandler(self.button_callback))
+        
+        # Текстовые сообщения (должен быть последним!)
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text))
         
-        logger.info("✅ Обработчики команд зарегистрированы (включая CallbackQueryHandler)")
+        logger.info("✅ Все обработчики зарегистрированы (включая ConversationHandler и Persistence)")
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработка команды /start"""
@@ -205,35 +270,59 @@ class TelegramBot:
                 db.refresh(db_user)
                 
                 welcome_text = f"""
-🤖 Добро пожаловать в Telegram Channel Parser Bot!
+🤖 **Добро пожаловать в Telegram Channel Parser Bot!**
 
 Я помогу вам отслеживать посты из ваших любимых каналов и искать информацию с помощью AI.
 
-🔐 Для начала работы необходимо пройти аутентификацию:
-/auth - Начать процесс аутентификации
+🎫 **Для начала работы нужен инвайт код**
 
-📋 После аутентификации будут доступны команды:
-/add_channel - Добавить канал для отслеживания
-/my_channels - Показать ваши каналы
+Обратитесь к администратору для получения инвайт кода, затем:
+
+📱 **Авторизация (QR код - БЕЗ SMS!):**
+/login INVITE_CODE
+
+**Пример:**
+`/login ABC123XYZ`
+
+✨ **Процесс авторизации:**
+1️⃣ Отправьте /login с вашим кодом
+2️⃣ Нажмите кнопку "🔐 Открыть QR авторизацию"
+3️⃣ Отсканируйте QR код или используйте ссылку
+4️⃣ Подтвердите в Telegram
+5️⃣ Готово! ✅
+
+📋 **После авторизации доступны:**
+• /add_channel - Добавить канал для парсинга
+• /my_channels - Список ваших каналов
+• /ask - Поиск ответа в постах (RAG)
+• /subscription - Ваша подписка и лимиты
+• /help - Полная справка
+
+⚡ **Особенности:**
+• Авторизация за 30 секунд (БЕЗ SMS кодов!)
+• Автоматический парсинг каналов каждые 30 минут
+• AI поиск по постам
+• Персональные дайджесты
 
 🤖 RAG & AI команды:
-/ask - Поиск ответа в постах
-/search - Гибридный поиск (посты + веб)
-/recommend - Персональные рекомендации
-/digest - AI-дайджесты
+• /ask - Поиск ответа в постах
+• /search - Гибридный поиск
+• /recommend - Персональные рекомендации
+• /digest - AI-дайджесты
 
-/help - Показать полную справку
+/help - Полная справка
                 """
             else:
+                # Определяем роль пользователя
+                is_admin = db_user.is_admin()
+                role_badge = "👑 Администратор" if is_admin else "👤 Пользователь"
+                
                 if db_user.is_authenticated:
-                    welcome_text = f"""
-🤖 С возвращением, {user.first_name}!
-
-✅ Вы аутентифицированы и можете использовать все функции.
-
+                    # Базовые команды для всех
+                    base_commands = f"""
 📋 **Управление каналами:**
 /add_channel - Добавить канал
-/my_channels - Ваши каналы
+/my_channels - Ваши каналы ({len(db_user.channels)}/{db_user.max_channels})
 
 🤖 **RAG & AI:**
 /ask <вопрос> - Поиск ответа в постах
@@ -241,15 +330,44 @@ class TelegramBot:
 /recommend - Персональные рекомендации
 /digest - AI-дайджесты
 
+💎 **Подписка:**
+/subscription - Ваша подписка ({db_user.subscription_type})
+"""
+                    
+                    # Админские команды
+                    admin_commands = """
+👑 **Команды администратора:**
+/admin - Открыть админ панель (управление пользователями)
+/admin_invite - Создать инвайт код
+/admin_stats - Статистика системы
+/admin_users - Список пользователей
+/admin_grant - Выдать подписку напрямую
+""" if is_admin else ""
+                    
+                    welcome_text = f"""
+🤖 **С возвращением, {user.first_name}!** {role_badge}
+
+✅ Статус: Авторизован
+💎 Подписка: {db_user.subscription_type}
+
+{base_commands}
+{admin_commands}
 /help - Полная справка
                     """
                 else:
                     welcome_text = f"""
-🤖 С возвращением, {user.first_name}!
+🤖 **С возвращением, {user.first_name}!** {role_badge}
 
-⚠️ Для использования функций необходимо пройти аутентификацию:
-/auth - Начать процесс аутентификации
-/auth_status - Проверить статус аутентификации
+⚠️ **Для использования функций необходимо авторизоваться:**
+
+📱 **Авторизация через QR код (рекомендуется):**
+/login INVITE_CODE
+
+**Альтернативный способ (свои API ключи):**
+/auth - Аутентификация через веб-форму
+/auth_status - Проверить статус
+
+💡 Инвайт код можно получить у администратора
                     """
             
             await update.message.reply_text(welcome_text)
@@ -390,20 +508,27 @@ class TelegramBot:
                 await update.message.reply_text("❌ Вы не аутентифицированы")
                 return
             
-            # Выходим из системы
+            # Выходим из системы (обновляет user объект)
             await logout_user(db_user)
+            
+            # ВАЖНО: Сохраняем изменения в БД
+            db.commit()
             
             # Очищаем состояние пользователя
             if user.id in self.user_states:
                 del self.user_states[user.id]
             
             await update.message.reply_text(
-                "✅ Вы успешно вышли из системы.\n"
-                "Для повторного использования функций пройдите аутентификацию: /auth"
+                "✅ Вы успешно вышли из системы.\n\n"
+                "Для повторного использования:\n"
+                "• `/login INVITE_CODE` - QR авторизация\n"
+                "• `/auth` - Веб-форма (свои API ключи)"
             )
             
         except Exception as e:
+            db.rollback()
             await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+            logger.error(f"Logout error: {e}", exc_info=True)
         finally:
             db.close()
     
@@ -486,6 +611,20 @@ class TelegramBot:
                 await update.message.reply_text(
                     "❌ Для добавления каналов необходимо пройти аутентификацию.\n"
                     "Используйте команду /auth"
+                )
+                return
+            
+            # ✅ НОВОЕ: Проверяем лимиты подписки
+            if not db_user.can_add_channel():
+                tier_name = db_user.subscription_type
+                from subscription_config import get_subscription_info
+                tier = get_subscription_info(tier_name)
+                
+                await update.message.reply_text(
+                    f"❌ Достигнут лимит каналов для подписки **{tier['name']}**: {db_user.max_channels}\n\n"
+                    f"💎 Для увеличения лимита обратитесь к администратору\n"
+                    f"Текущая подписка: /subscription",
+                    parse_mode='Markdown'
                 )
                 return
             
@@ -1519,61 +1658,248 @@ class TelegramBot:
             )
     
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Справка по командам"""
-        help_text = """
+        """Справка по командам с учетом роли пользователя"""
+        user = update.effective_user
+        db = SessionLocal()
+        
+        try:
+            db_user = db.query(User).filter(User.telegram_id == user.id).first()
+            
+            if not db_user:
+                await update.message.reply_text(
+                    "❌ Пользователь не найден. Используйте /start для регистрации"
+                )
+                return
+            
+            is_admin = db_user.is_admin()
+            
+            # Базовая справка для всех
+            base_help = """
 🤖 **Telegram Channel Parser Bot - Справка**
 
-🔐 **Команды аутентификации:**
-/auth - Безопасная аутентификация через веб-форму
-/auth\\_status - Проверить статус аутентификации
+🔐 **Аутентификация:**
+/login INVITE\\_CODE - QR авторизация (БЕЗ SMS!)
+/auth - Веб-форма (свои API ключи)
+/auth\\_status - Проверить статус
 /logout - Выйти из системы
-/clear\\_auth - Очистить данные (при блокировке)
 
 📋 **Управление каналами:**
 /add\\_channel @channel\\_name - Добавить канал
 /my\\_channels - Список ваших каналов
 /remove\\_channel - Удалить канал
 
-🤖 **RAG & AI (новое):**
+🤖 **RAG & AI:**
 /ask <вопрос> - Поиск ответа в постах
 /search <запрос> - Гибридный поиск (посты + веб)
 /recommend - Персональные рекомендации
 /digest - Настроить AI-дайджесты
 
-**Примеры RAG команд:**
-• `/ask Что нового в блокчейне?`
-• `/ask Расскажи про нейросети`
+💎 **Подписка:**
+/subscription - Информация о вашей подписке
+
+**Примеры команд:**
+• `/ask Что нового в AI?`
 • `/search квантовые компьютеры`
-• `/recommend`
+• `/add_channel @durov`
+"""
+            
+            # Админские команды
+            admin_help = """
+👑 **КОМАНДЫ АДМИНИСТРАТОРА:**
 
-💡 **Как это работает:**
-1. Аутентификация: /auth
-2. Добавьте каналы: /add\\_channel
-3. Посты парсятся автоматически
-4. Используйте /ask для RAG-поиска
-5. Настройте дайджесты: /digest
+📱 **Админ панель (рекомендуется):**
+/admin - Открыть Admin Panel Mini App
+  • Управление пользователями (роли, подписки)
+  • Создание инвайт кодов
+  • Статистика и графики
+  • Блокировка/разблокировка
 
-🔐 **Получение API ключей:**
-1. https://my.telegram.org
-2. Войдите в Telegram
-3. Создайте приложение
-4. Скопируйте API\\_ID и API\\_HASH
+📝 **Текстовые админ команды:**
+/admin\\_invite - Создать инвайт код
+/admin\\_users - Список всех пользователей
+/admin\\_user <telegram\\_id> - Информация о пользователе
+/admin\\_grant <telegram\\_id> <subscription> <days> - Выдать подписку
+/admin\\_stats - Общая статистика
 
-⚠️ **БЕЗОПАСНОСТЬ:**
-- Не вводите коды в чат!
-- Используйте веб-форму /auth
-- Данные зашифрованы в БД
-        """
-        await update.message.reply_text(help_text, parse_mode='Markdown')
+💡 **Рекомендация:** Используйте `/admin` для удобного управления через Mini App
+""" if is_admin else ""
+            
+            footer = """
+💡 **Полезная информация:**
+• Парсинг каналов: автоматически каждые 30 минут
+• QR авторизация: без SMS кодов, за 30 секунд
+• RAG поиск: по всем вашим постам с AI
+• Дайджесты: персонализированные сводки
+
+📚 **Документация:**
+Подробные гайды и примеры: /help\\_docs
+            """
+            
+            help_text = base_help + admin_help + footer
+            
+            await update.message.reply_text(help_text, parse_mode='Markdown')
+            
+        except Exception as e:
+            logger.error(f"Ошибка в help_command: {e}")
+            await update.message.reply_text("❌ Произошла ошибка")
+        finally:
+            db.close()
+    
+    async def debug_status_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Показать детальный статус пользователя для отладки"""
+        user = update.effective_user
+        db = SessionLocal()
+        
+        try:
+            db_user = db.query(User).filter(User.telegram_id == user.id).first()
+            if not db_user:
+                await update.message.reply_text("❌ Пользователь не найден")
+                return
+            
+            text = f"🔍 **Debug Status**\n\n"
+            text += f"👤 User: {db_user.first_name} ({db_user.telegram_id})\n"
+            text += f"🆔 DB ID: {db_user.id}\n"
+            text += f"📍 Role: {db_user.role}\n"
+            text += f"💎 Subscription: {db_user.subscription_type}\n"
+            text += f"🔐 Authenticated: {db_user.is_authenticated}\n\n"
+            
+            text += f"**Auth Status:**\n"
+            text += f"• Blocked: {'❌ YES' if db_user.is_blocked else '✅ NO'}\n"
+            text += f"• Failed attempts: {db_user.failed_auth_attempts}\n"
+            
+            if db_user.block_expires:
+                # Timezone-aware сравнение
+                expires = db_user.block_expires
+                if expires.tzinfo is None:
+                    expires = expires.replace(tzinfo=timezone.utc)
+                
+                if expires > datetime.now(timezone.utc):
+                    text += f"• Block expires: {expires.strftime('%d.%m.%Y %H:%M UTC')}\n"
+                else:
+                    text += f"• Block expired ✅\n"
+            
+            if db_user.last_auth_attempt:
+                text += f"• Last attempt: {db_user.last_auth_attempt.strftime('%d.%m.%Y %H:%M:%S UTC')}\n"
+            
+            if db_user.auth_error:
+                text += f"• Last error: {db_user.auth_error}\n"
+            
+            # Session файл
+            from shared_auth_manager import shared_auth_manager
+            session_path = shared_auth_manager._get_session_path(user.id)
+            import os
+            session_exists = os.path.exists(session_path)
+            text += f"\n**Session:**\n"
+            text += f"• File exists: {'✅ YES' if session_exists else '❌ NO'}\n"
+            text += f"• Active client: {'✅ YES' if user.id in shared_auth_manager.active_clients else '❌ NO'}\n"
+            
+            await update.message.reply_text(text, parse_mode='Markdown')
+            
+        except Exception as e:
+            logger.error(f"Debug status error: {e}")
+            await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+        finally:
+            db.close()
+    
+    async def debug_unblock_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Разблокировать пользователя (для отладки)"""
+        user = update.effective_user
+        db = SessionLocal()
+        
+        try:
+            db_user = db.query(User).filter(User.telegram_id == user.id).first()
+            if not db_user:
+                await update.message.reply_text("❌ Пользователь не найден")
+                return
+            
+            # Разблокируем
+            db_user.is_blocked = False
+            db_user.block_expires = None
+            db_user.failed_auth_attempts = 0
+            db_user.auth_error = None
+            db.commit()
+            
+            await update.message.reply_text(
+                "✅ **Разблокировка выполнена!**\n\n"
+                "• Блокировка снята\n"
+                "• Счетчик попыток сброшен\n"
+                "• Ошибки очищены\n\n"
+                "Теперь можете попробовать `/login` снова",
+                parse_mode='Markdown'
+            )
+            
+        except Exception as e:
+            await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+        finally:
+            db.close()
+    
+    async def debug_reset_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Полный сброс для отладки (session + БД)"""
+        user = update.effective_user
+        db = SessionLocal()
+        
+        try:
+            db_user = db.query(User).filter(User.telegram_id == user.id).first()
+            if not db_user:
+                await update.message.reply_text("❌ Пользователь не найден")
+                return
+            
+            # Очищаем все данные авторизации
+            db_user.is_authenticated = False
+            db_user.is_blocked = False
+            db_user.block_expires = None
+            db_user.failed_auth_attempts = 0
+            db_user.auth_error = None
+            db_user.last_auth_attempt = None
+            db_user.last_auth_check = None
+            db_user.phone_number = None
+            db.commit()
+            
+            # Удаляем session файл
+            from shared_auth_manager import shared_auth_manager
+            await shared_auth_manager.disconnect_client(user.id)
+            
+            session_path = shared_auth_manager._get_session_path(user.id)
+            if os.path.exists(session_path):
+                os.remove(session_path)
+                logger.info(f"🗑️ Session файл удален для {user.id}")
+            
+            await update.message.reply_text(
+                "✅ **Полный сброс выполнен!**\n\n"
+                "Очищено:\n"
+                "• Данные авторизации\n"
+                "• Блокировки\n"
+                "• Session файл\n"
+                "• Счетчики попыток\n\n"
+                "🔄 Используйте `/login INVITE_CODE` для новой попытки",
+                parse_mode='Markdown'
+            )
+            
+        except Exception as e:
+            logger.error(f"Debug reset error: {e}")
+            await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+        finally:
+            db.close()
     
     def run(self):
-        """Запуск бота"""
+        """Запуск бота (синхронный для standalone)"""
         print("🤖 Запуск Telegram бота...")
         # Явно указываем, что хотим получать callback_query updates
         self.application.run_polling(
             allowed_updates=["message", "callback_query", "edited_message"]
         )
         logger.info("✅ Бот запущен с поддержкой: message, callback_query, edited_message")
+    
+    async def run_async(self):
+        """Запуск бота (async для интеграции в run_system.py)"""
+        logger.info("🤖 Запуск Telegram бота (async)...")
+        # Инициализируем и запускаем бота
+        await self.application.initialize()
+        await self.application.start()
+        await self.application.updater.start_polling(
+            allowed_updates=["message", "callback_query", "edited_message"]
+        )
+        logger.info("✅ Telegram Bot запущен в async режиме")
 
 if __name__ == "__main__":
     from database import create_tables

@@ -25,7 +25,7 @@ RUN mkdir -p sessions logs data
 ENV HOST=0.0.0.0
 ENV PORT=8010
 ENV PARSER_INTERVAL_MINUTES=30
-ENV DATABASE_URL=sqlite:///./telethon_bot.db
+# DATABASE_URL устанавливается через docker-compose (PostgreSQL only)
 
 # Открытие порта
 EXPOSE 8010

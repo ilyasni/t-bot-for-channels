@@ -40,7 +40,7 @@ python scripts/migrations/add_enriched_content.py
 cd /home/ilyasni/n8n-server/n8n-installer
 
 # Пересборка telethon-bot
-docker compose up telethon-bot --build -d
+docker compose up telethon --build -d  # telethon-bot удален в v3.1.1 (unified)
 
 # Или через alias
 telethon-rebuild
@@ -623,8 +623,8 @@ docker images | grep telethon-bot
 # Смотрим дату создания - должна быть свежая
 
 # Пересобрать принудительно
-docker compose build telethon-bot --no-cache
-docker compose up telethon-bot -d
+docker compose build telethon --no-cache  # telethon-bot удален в v3.1.1
+docker compose up telethon -d
 ```
 
 ### Проблема: RAG service возвращает 404

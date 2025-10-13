@@ -35,8 +35,16 @@
     reverse_proxy kong:8000
 }
 
-# Telegram Auth Server
+# Telegram Auth Server (QR Mini App + Admin Panel + OAuth)
 {$TELEGRAM_AUTH_HOSTNAME:telegram-auth.produman.studio} {
+    # Admin Panel Mini App (FastAPI на порту 8010)
+    reverse_proxy /admin-panel* telethon:8010
+    reverse_proxy /api/admin/* telethon:8010
+    
+    # QR Auth Mini App endpoints (FastAPI на порту 8010)
+    reverse_proxy /qr-auth* telethon:8010
+    
+    # OAuth web server (старый auth на порту 8001)
     reverse_proxy telethon:8001
 }
 
