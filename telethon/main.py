@@ -77,8 +77,10 @@ async def shutdown_event():
 
 # Новые эндпоинты для многопользовательской системы
 
-# Устаревшие эндпоинты аутентификации удалены
-# Используйте веб-сервер аутентификации: start_auth_server.py
+# Аутентификация пользователей:
+#   - /login INVITE_CODE - QR авторизация через Telegram Mini App (рекомендуется)
+#   - /auth - Расширенная авторизация через OAuth веб-форму (auth_web_server.py)
+# Auth server запускается автоматически в run_system.py на порту 8001
 
 @app.get("/users/{user_id}/auth_status")
 async def get_auth_status(user_id: int, db: Session = Depends(get_db)):

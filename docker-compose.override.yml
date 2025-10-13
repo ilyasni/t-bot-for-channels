@@ -59,43 +59,13 @@ services:
     networks:
       - localai_default
 
-  telethon-bot:
-    env_file:
-      - ./telethon/.env
-    build:
-      context: ./telethon
-      dockerfile: Dockerfile.telethon
-    container_name: telethon-bot
-    command: ["python", "bot_standalone.py"]
-    volumes:
-      # Монтируем сессии Telegram для сохранения аутентификации
-      - ./telethon/sessions:/app/sessions
-      # Монтируем базу данных для сохранения данных
-      - ./telethon/data:/app/data
-      # Монтируем логи
-      - ./telethon/logs:/app/logs
-      # Монтируем .env файл
-      - ./telethon/.env:/app/.env
-    environment:
-      # База данных - ТОЛЬКО PostgreSQL (Supabase)
-      - TELEGRAM_DATABASE_URL=${TELEGRAM_DATABASE_URL}
-      # Telegram Bot Token
-      - BOT_TOKEN=${BOT_TOKEN}
-      # Ключ шифрования (общий для всего проекта)
-      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
-      # Master credentials для упрощенной авторизации
-      - MASTER_API_ID=${MASTER_API_ID}
-      - MASTER_API_HASH=${MASTER_API_HASH}
-      - ADMIN_TELEGRAM_IDS=${ADMIN_TELEGRAM_IDS}
-      # Base URL для Mini App (QR авторизация)
-      - AUTH_BASE_URL=${AUTH_BASE_URL:-https://telegram-auth.produman.studio}
-      # Redis (для QR сессий shared между контейнерами)
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      # REDIS_PASSWORD не установлен - Valkey без пароля
-    restart: unless-stopped
-    networks:
-      - localai_default
+  # telethon-bot: УДАЛЕН в v3.1.1 - бот теперь работает внутри telethon контейнера
+  # После объединения контейнеров, telethon запускает run_system.py который включает:
+  #   - Telegram Bot (async)
+  #   - FastAPI Server (порт 8010)
+  #   - Auth Web Server (порт 8001)
+  #   - Parser Service (автоматический парсинг)
+  # Standalone bot_standalone.py больше не нужен (вызывал конфликт getUpdates)
 
   gpt2giga-proxy:
     build:

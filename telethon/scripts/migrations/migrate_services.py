@@ -262,7 +262,7 @@ class MigrationManager:
             "python.*main.py",
             "python.*bot.py",
             "python.*run_system.py",
-            "python.*start_secure_system.py",
+            # "python.*start_secure_system.py",  # Removed in v3.1.1
         ]
         
         for service in services:
@@ -423,7 +423,7 @@ class MigrationManager:
         
         for script, log_file in [
             ("run_system.py", "system.log"),
-            ("start_secure_system.py", "secure_system.log"),
+            # ("start_secure_system.py", "secure_system.log"),  # Removed in v3.1.1
         ]:
             script_path = self.script_dir / script
             if script_path.exists():

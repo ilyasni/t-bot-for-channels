@@ -294,7 +294,7 @@ curl -X POST http://localhost:8020/rag/query \
 ### Бот не отвечает
 ```bash
 docker logs telethon-bot --tail 50
-docker compose restart telethon-bot
+docker compose restart telethon  # telethon-bot удален в v3.1.1 (unified architecture)
 ```
 
 ### RAG команды не работают

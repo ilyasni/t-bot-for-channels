@@ -63,6 +63,8 @@ run_api() {
 
 run_bot() {
     log_info "Starting only Telegram bot..."
+    log_warning "ВНИМАНИЕ: bot_standalone.py - DEPRECATED в Docker!"
+    log_warning "Используйте для локальной отладки. В Docker используется run_system.py"
     if [ ! -d "venv" ]; then
         python3 -m venv venv
         source venv/bin/activate
@@ -76,23 +78,26 @@ run_bot() {
 rebuild_docker() {
     log_info "Rebuilding telethon Docker containers..."
     cd "$PROJECT_ROOT"
-    docker compose -f docker-compose.override.yml build telethon telethon-bot
+    # telethon-bot удален в v3.1.1 - теперь unified architecture
+    docker compose -f docker-compose.override.yml build telethon
     log_info "Restarting containers..."
-    docker compose -f docker-compose.override.yml up -d telethon telethon-bot
+    docker compose -f docker-compose.override.yml up -d telethon
     log_info "Done! Use './scripts/utils/dev.sh logs' to view logs"
 }
 
 restart_docker() {
-    log_info "Restarting telethon Docker containers..."
+    log_info "Restarting telethon container..."
     cd "$PROJECT_ROOT"
-    docker compose -f docker-compose.override.yml restart telethon telethon-bot
+    # telethon-bot удален в v3.1.1 - теперь unified architecture
+    docker compose -f docker-compose.override.yml restart telethon
     log_info "Done!"
 }
 
 stop_docker() {
-    log_info "Stopping telethon Docker containers..."
+    log_info "Stopping telethon container..."
     cd "$PROJECT_ROOT"
-    docker compose -f docker-compose.override.yml stop telethon telethon-bot
+    # telethon-bot удален в v3.1.1 - теперь unified architecture
+    docker compose -f docker-compose.override.yml stop telethon
     log_info "Stopped!"
 }
 
