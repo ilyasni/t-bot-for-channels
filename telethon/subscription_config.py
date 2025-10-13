@@ -6,10 +6,12 @@ SUBSCRIPTION_TIERS = {
     "free": {
         "name": "Free",
         "max_channels": 3,
+        "max_groups": 2,  # Новое: лимит групп
         "max_posts_per_day": 100,
         "rag_queries_per_day": 10,
         "ai_digest": False,
         "priority_parsing": False,
+        "mentions_enabled": True,  # Уведомления об упоминаниях
         "price_rub": 0,
         "price_usd": 0,
         "description": "Базовый функционал для начала работы"
@@ -17,10 +19,12 @@ SUBSCRIPTION_TIERS = {
     "trial": {
         "name": "Trial (7 дней)",
         "max_channels": 10,
+        "max_groups": 5,  # Новое: лимит групп
         "max_posts_per_day": 500,
         "rag_queries_per_day": 50,
         "ai_digest": True,
         "priority_parsing": True,
+        "mentions_enabled": True,
         "price_rub": 0,
         "price_usd": 0,
         "duration_days": 7,
@@ -29,10 +33,12 @@ SUBSCRIPTION_TIERS = {
     "basic": {
         "name": "Basic",
         "max_channels": 10,
+        "max_groups": 5,  # Новое: лимит групп
         "max_posts_per_day": 500,
         "rag_queries_per_day": 50,
         "ai_digest": True,
         "priority_parsing": False,
+        "mentions_enabled": True,
         "price_rub": 500,
         "price_usd": 5,
         "duration_days": 30,
@@ -41,10 +47,12 @@ SUBSCRIPTION_TIERS = {
     "premium": {
         "name": "Premium",
         "max_channels": 50,
+        "max_groups": 20,  # Новое: лимит групп
         "max_posts_per_day": 2000,
         "rag_queries_per_day": 200,
         "ai_digest": True,
         "priority_parsing": True,
+        "mentions_enabled": True,
         "price_rub": 1500,
         "price_usd": 15,
         "duration_days": 30,
@@ -53,10 +61,12 @@ SUBSCRIPTION_TIERS = {
     "enterprise": {
         "name": "Enterprise",
         "max_channels": 999,
+        "max_groups": 100,  # Новое: лимит групп
         "max_posts_per_day": 99999,
         "rag_queries_per_day": 999,
         "ai_digest": True,
         "priority_parsing": True,
+        "mentions_enabled": True,
         "price_rub": 5000,
         "price_usd": 50,
         "duration_days": 30,
@@ -78,9 +88,11 @@ def format_subscription_info(subscription_type: str) -> str:
     text += f"📝 {tier['description']}\n\n"
     text += f"📊 **Возможности:**\n"
     text += f"• Каналов: {tier['max_channels']}\n"
+    text += f"• Групп: {tier.get('max_groups', 0)}\n"
     text += f"• Постов в день: {tier['max_posts_per_day']}\n"
     text += f"• RAG запросов в день: {tier['rag_queries_per_day']}\n"
     text += f"• AI-дайджесты: {'✅' if tier['ai_digest'] else '❌'}\n"
+    text += f"• Уведомления об упоминаниях: {'✅' if tier.get('mentions_enabled', False) else '❌'}\n"
     text += f"• Приоритетный парсинг: {'✅' if tier['priority_parsing'] else '❌'}\n"
     
     if tier['price_rub'] > 0:

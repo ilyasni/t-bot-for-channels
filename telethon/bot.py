@@ -5,9 +5,9 @@ from telegram.ext import (
 )
 from sqlalchemy.orm import Session
 from database import get_db, SessionLocal
-from models import User, Channel, Post
+from models import User, Channel, Post, user_group
 from auth import create_auth_session, get_auth_url, check_user_auth_status, logout_user
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Optional
 import re
 import os
@@ -211,6 +211,13 @@ class TelegramBot:
         self.application.add_handler(CommandHandler("remove_channel", self.remove_channel_command))
         self.application.add_handler(CommandHandler("help", self.help_command))
         
+        # ✅ НОВОЕ: Команды для групп
+        self.application.add_handler(CommandHandler("add_group", self.add_group_command))
+        self.application.add_handler(CommandHandler("my_groups", self.my_groups_command))
+        self.application.add_handler(CommandHandler("group_digest", self.group_digest_command))
+        self.application.add_handler(CommandHandler("group_settings", self.group_settings_command))
+        logger.info("  ✅ Команды групп зарегистрированы")
+        
         # ✅ НОВОЕ: Команда для просмотра подписки
         self.application.add_handler(CommandHandler("subscription", subscription_command))
         
@@ -231,6 +238,11 @@ class TelegramBot:
         self.application.add_handler(CommandHandler("debug_force_auth", debug_force_auth_command))
         self.application.add_handler(CommandHandler("debug_reset_auth", debug_reset_auth_command))
         self.application.add_handler(CommandHandler("debug_delete_user", debug_delete_user_command))
+        
+        # ✅ НОВОЕ: Debug команды для групп
+        from bot_group_debug import debug_group_digest_command, debug_n8n_test_command
+        self.application.add_handler(CommandHandler("debug_group_digest", debug_group_digest_command))
+        self.application.add_handler(CommandHandler("debug_n8n", debug_n8n_test_command))
         logger.info("  ✅ Админ и Debug команды зарегистрированы")
         
         # RAG команды
@@ -709,6 +721,586 @@ class TelegramBot:
     async def remove_channel_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработка команды удаления канала"""
         await self.my_channels_command(update, context)
+    
+    async def add_group_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Добавить Telegram группу для мониторинга"""
+        user = update.effective_user
+        args = context.args
+        
+        db = SessionLocal()
+        try:
+            db_user = db.query(User).filter(User.telegram_id == user.id).first()
+            if not db_user:
+                await update.message.reply_text("❌ Пользователь не найден. Используйте /login")
+                return
+            
+            # Проверка аутентификации
+            if not db_user.is_authenticated:
+                await update.message.reply_text(
+                    "❌ Вы не аутентифицированы\n"
+                    "Используйте /login для QR-авторизации"
+                )
+                return
+            
+            # Получаем клиент
+            from shared_auth_manager import shared_auth_manager
+            client = await shared_auth_manager.get_user_client(user.id)
+            
+            if not client:
+                await update.message.reply_text("❌ Не удалось подключиться к Telegram")
+                return
+            
+            # Если нет аргументов - показываем список доступных групп
+            if not args:
+                await update.message.reply_text("⏳ Получаю список ваших групп...")
+                
+                # Получаем все диалоги пользователя
+                from telethon.tl.types import Chat, Channel as TelegramChannel
+                
+                user_groups = []
+                async for dialog in client.iter_dialogs(limit=100):
+                    entity = dialog.entity
+                    # Только группы и супергруппы (не каналы, не личные чаты)
+                    if isinstance(entity, (Chat, TelegramChannel)):
+                        # Проверяем что это группа (не канал)
+                        if isinstance(entity, TelegramChannel) and not entity.broadcast:
+                            # Супергруппа
+                            user_groups.append({
+                                'id': entity.id,
+                                'title': entity.title,
+                                'username': getattr(entity, 'username', None)
+                            })
+                        elif isinstance(entity, Chat):
+                            # Обычная группа
+                            user_groups.append({
+                                'id': entity.id,
+                                'title': entity.title,
+                                'username': None
+                            })
+                
+                if not user_groups:
+                    await update.message.reply_text(
+                        "📭 Вы не состоите ни в одной группе\n\n"
+                        "Добавьте группу по ID: `/add_group -1001234567890`"
+                    )
+                    return
+                
+                # Показываем список
+                text = f"👥 **Ваши группы** ({len(user_groups)}):\n\n"
+                text += "Для добавления используйте ID группы:\n\n"
+                
+                for i, g in enumerate(user_groups[:20], 1):  # Показываем до 20
+                    # Экранируем спецсимволы Markdown в названии
+                    safe_title = g['title'].replace('_', '\\_').replace('*', '\\*').replace('[', '\\[').replace('`', '\\`')
+                    text += f"{i}. **{safe_title}**\n"
+                    text += f"   `/add_group {g['id']}`\n\n"
+                
+                if len(user_groups) > 20:
+                    text += f"... и еще {len(user_groups) - 20} групп\n\n"
+                
+                text += "💡 Скопируйте команду и отправьте"
+                
+                await update.message.reply_text(text, parse_mode='Markdown')
+                return
+            
+            # Проверка лимита групп
+            if not db_user.can_add_group():
+                from subscription_config import get_subscription_info
+                current_tier = get_subscription_info(db_user.subscription_type)
+                max_groups = current_tier.get('max_groups', 0)
+                
+                await update.message.reply_text(
+                    f"❌ Достигнут лимит групп ({max_groups})\n\n"
+                    f"Текущая подписка: {current_tier['name']}\n"
+                    f"Для увеличения лимита обратитесь к администратору"
+                )
+                return
+            
+            # Парсим input (ссылка или ID)
+            group_input = args[0]
+            group_id = None
+            group_entity = None
+            
+            # Если это число - это group_id
+            if group_input.lstrip('-').isdigit():
+                group_id = int(group_input)
+                
+                await update.message.reply_text("⏳ Проверяю доступ к группе...")
+                
+                # Получаем entity
+                try:
+                    group_entity = await client.get_entity(group_id)
+                except Exception as e:
+                    # Возможно группа приватная - ищем в диалогах
+                    logger.info(f"Не удалось получить entity по ID {group_id}, ищем в диалогах...")
+                    
+                    from telethon.tl.types import Chat, Channel as TelegramChannel
+                    async for dialog in client.iter_dialogs(limit=200):
+                        if dialog.entity.id == group_id:
+                            group_entity = dialog.entity
+                            break
+                    
+                    if not group_entity:
+                        await update.message.reply_text(
+                            f"❌ Группа не найдена\n\n"
+                            f"Возможные причины:\n"
+                            f"• Вы не состоите в этой группе\n"
+                            f"• ID группы неверный\n\n"
+                            f"💡 Используйте `/add_group` без параметров чтобы увидеть список ваших групп"
+                        )
+                        return
+            
+            # Если ссылка - обрабатываем
+            elif 't.me/' in group_input or 'telegram.me/' in group_input:
+                parts = group_input.rstrip('/').split('/')
+                last_part = parts[-1]
+                
+                # Проверяем приватная ли группа (начинается с +)
+                if last_part.startswith('+'):
+                    # Приватная группа - ищем в диалогах пользователя
+                    await update.message.reply_text(
+                        "🔍 Приватная группа обнаружена\n"
+                        "Ищу в ваших диалогах..."
+                    )
+                    
+                    # Invite hash для поиска
+                    invite_hash = last_part[1:]  # Убираем +
+                    
+                    from telethon.tl.types import Chat, Channel as TelegramChannel
+                    
+                    # Получаем все группы и ищем
+                    found_groups = []
+                    async for dialog in client.iter_dialogs(limit=200):
+                        entity = dialog.entity
+                        if isinstance(entity, (Chat, TelegramChannel)):
+                            # Проверяем что это группа (не канал)
+                            if isinstance(entity, TelegramChannel) and not entity.broadcast:
+                                found_groups.append(entity)
+                            elif isinstance(entity, Chat):
+                                found_groups.append(entity)
+                    
+                    if not found_groups:
+                        await update.message.reply_text(
+                            "📭 Вы не состоите ни в одной группе\n\n"
+                            "💡 Сначала вступите в группу через invite link в Telegram,\n"
+                            "затем используйте `/add_group` для выбора из списка"
+                        )
+                        return
+                    
+                    # Показываем список для выбора
+                    text = f"👥 **Найдено групп:** {len(found_groups)}\n\n"
+                    text += "Выберите нужную группу:\n\n"
+                    
+                    for i, g in enumerate(found_groups[:20], 1):
+                        # Экранируем спецсимволы Markdown
+                        safe_title = g.title.replace('_', '\\_').replace('*', '\\*').replace('[', '\\[').replace('`', '\\`')
+                        text += f"{i}. **{safe_title}**\n"
+                        text += f"   `/add_group {g.id}`\n\n"
+                    
+                    if len(found_groups) > 20:
+                        text += f"... и еще {len(found_groups) - 20} групп\n\n"
+                    
+                    text += "💡 Найдите нужную группу и скопируйте команду"
+                    
+                    await update.message.reply_text(text, parse_mode='Markdown')
+                    return
+                
+                elif last_part.lstrip('-').isdigit():
+                    # ID в ссылке
+                    group_id = int(last_part)
+                    group_entity = await client.get_entity(group_id)
+                else:
+                    # Публичный username
+                    await update.message.reply_text("⏳ Получение информации о группе...")
+                    try:
+                        group_entity = await client.get_entity(last_part)
+                        group_id = group_entity.id
+                    except Exception as e:
+                        await update.message.reply_text(
+                            f"❌ Не удалось найти группу: {str(e)}\n\n"
+                            f"💡 Для приватных групп используйте `/add_group` без параметров"
+                        )
+                        return
+            else:
+                await update.message.reply_text("❌ Неверный формат ссылки или ID")
+                return
+            
+            # Проверяем что получили entity
+            if not group_entity and group_id:
+                # Пытаемся получить entity по ID
+                try:
+                    group_entity = await client.get_entity(group_id)
+                except Exception as e:
+                    await update.message.reply_text(
+                        f"❌ Не удалось получить информацию о группе\n\n"
+                        f"Используйте `/add_group` без параметров для выбора из списка"
+                    )
+                    return
+            
+            if not group_entity:
+                await update.message.reply_text("❌ Не удалось получить информацию о группе")
+                return
+            
+            # Извлекаем данные
+            group_title = getattr(group_entity, 'title', 'Unknown')
+            group_username = getattr(group_entity, 'username', None)
+            final_group_id = group_entity.id
+            
+            # Проверяем что это группа
+            from telethon.tl.types import Chat, Channel as TelegramChannel
+            if isinstance(group_entity, TelegramChannel) and group_entity.broadcast:
+                await update.message.reply_text(
+                    "❌ Это канал, не группа\n"
+                    "Используйте /add_channel для каналов"
+                )
+                return
+            
+            # Создаем или получаем группу в БД
+            from models import Group
+            group = Group.get_or_create(
+                db, 
+                group_id=final_group_id,
+                group_title=group_title,
+                group_username=group_username
+            )
+            
+            # Проверяем не добавлена ли уже
+            if db_user in group.users:
+                safe_title = group_title.replace('_', '\\_').replace('*', '\\*').replace('[', '\\[').replace('`', '\\`')
+                await update.message.reply_text(
+                    f"ℹ️ Группа **{safe_title}** уже добавлена\n\n"
+                    f"Используйте /my_groups для просмотра",
+                    parse_mode='Markdown'
+                )
+                return
+            
+            # Добавляем пользователя к группе
+            group.add_user(db, db_user, is_active=True, mentions_enabled=True)
+            db.commit()
+            
+            # Запускаем мониторинг для этого пользователя
+            from group_monitor_service import group_monitor_service
+            await group_monitor_service.start_monitoring(user.id)
+            
+            # Экранируем спецсимволы Markdown
+            safe_title = group_title.replace('_', '\\_').replace('*', '\\*').replace('[', '\\[').replace('`', '\\`')
+            
+            await update.message.reply_text(
+                f"✅ Группа **{safe_title}** добавлена!\n\n"
+                f"🔔 Мониторинг упоминаний активирован\n"
+                f"📊 Используйте /group_digest для получения резюме разговоров\n\n"
+                f"Настройки: /group_settings",
+                parse_mode='Markdown'
+            )
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка add_group: {e}", exc_info=True)
+            await update.message.reply_text(
+                f"❌ Ошибка: {str(e)}\n\n"
+                "💡 Для приватных групп:\n"
+                "1. Используйте `/add_group` без параметров\n"
+                "2. Выберите группу из списка\n"
+                "3. Скопируйте команду с ID"
+            )
+        finally:
+            db.close()
+    
+    async def my_groups_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Показать список отслеживаемых групп"""
+        user = update.effective_user
+        db = SessionLocal()
+        
+        try:
+            db_user = db.query(User).filter(User.telegram_id == user.id).first()
+            if not db_user:
+                await update.message.reply_text("❌ Пользователь не найден")
+                return
+            
+            # Получаем группы пользователя
+            from models import Group
+            groups = db.query(Group).join(
+                user_group,
+                Group.id == user_group.c.group_id
+            ).filter(
+                user_group.c.user_id == db_user.id
+            ).all()
+            
+            if not groups:
+                await update.message.reply_text(
+                    "📭 У вас нет отслеживаемых групп\n\n"
+                    "Добавьте группу: /add_group <ссылка>"
+                )
+                return
+            
+            # Формируем список
+            from subscription_config import get_subscription_info
+            tier = get_subscription_info(db_user.subscription_type)
+            max_groups = tier.get('max_groups', 0)
+            
+            text = f"📊 **Ваши группы** ({len(groups)}/{max_groups}):\n\n"
+            
+            for i, group in enumerate(groups, 1):
+                # Получаем настройки для группы
+                subscription = db.execute(
+                    user_group.select().where(
+                        (user_group.c.user_id == db_user.id) &
+                        (user_group.c.group_id == group.id)
+                    )
+                ).fetchone()
+                
+                status = "🟢" if subscription.is_active else "🔴"
+                mentions = "🔔" if subscription.mentions_enabled else "🔕"
+                
+                # Экранируем спецсимволы Markdown в названии
+                display_name = group.group_title or str(group.group_id)
+                safe_name = display_name.replace('_', '\\_').replace('*', '\\*').replace('[', '\\[').replace('`', '\\`')
+                
+                text += f"{i}. {status} **{safe_name}**\n"
+                text += f"   {mentions} Упоминания | ID: `{group.group_id}`\n"
+            
+            text += f"\n💡 Используйте /group_settings для настройки уведомлений"
+            
+            await update.message.reply_text(text, parse_mode='Markdown')
+            
+        except Exception as e:
+            await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+        finally:
+            db.close()
+    
+    async def group_digest_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Сгенерировать дайджест разговора в группе"""
+        user = update.effective_user
+        args = context.args
+        
+        db = SessionLocal()
+        try:
+            db_user = db.query(User).filter(User.telegram_id == user.id).first()
+            if not db_user:
+                await update.message.reply_text("❌ Пользователь не найден")
+                return
+            
+            # Проверка аутентификации
+            if not db_user.is_authenticated:
+                await update.message.reply_text(
+                    "❌ Вы не аутентифицированы\n"
+                    "Используйте /login для авторизации"
+                )
+                return
+            
+            # Получаем группы пользователя
+            from models import Group
+            groups = db.query(Group).join(
+                user_group,
+                Group.id == user_group.c.group_id
+            ).filter(
+                user_group.c.user_id == db_user.id,
+                user_group.c.is_active == True
+            ).all()
+            
+            if not groups:
+                await update.message.reply_text(
+                    "📭 У вас нет активных групп\n\n"
+                    "Добавьте группу: /add_group <ссылка>"
+                )
+                return
+            
+            # Парсим аргументы
+            hours = 24
+            target_group = None
+            
+            if len(args) == 1:
+                # /group_digest 24
+                if args[0].isdigit():
+                    hours = int(args[0])
+                else:
+                    # /group_digest group_name - пока не поддерживаем
+                    await update.message.reply_text(
+                        "💡 Укажите количество часов: `/group_digest 24`",
+                        parse_mode='Markdown'
+                    )
+                    return
+            elif len(args) == 2:
+                # /group_digest group_name 24 - будущая функция
+                pass
+            
+            # Если у пользователя одна группа - используем её
+            if len(groups) == 1:
+                target_group = groups[0]
+            else:
+                # Если несколько групп - показываем список для выбора
+                text = "📊 Выберите группу для дайджеста:\n\n"
+                for i, group in enumerate(groups, 1):
+                    display = group.group_title or str(group.group_id)
+                    safe_display = display.replace('_', '\\_').replace('*', '\\*').replace('[', '\\[').replace('`', '\\`')
+                    text += f"{i}. {safe_display}\n"
+                text += f"\nИспользуйте: `/group_digest <номер> <часы>`"
+                
+                await update.message.reply_text(text, parse_mode='Markdown')
+                return
+            
+            # Генерируем дайджест
+            safe_group_title = (target_group.group_title or str(target_group.group_id)).replace('_', '\\_').replace('*', '\\*').replace('[', '\\[').replace('`', '\\`')
+            await update.message.reply_text(
+                f"⏳ Генерация дайджеста для группы **{safe_group_title}**...\n"
+                f"Период: {hours} часов\n\n"
+                "Это может занять 20-30 секунд ⏰",
+                parse_mode='Markdown'
+            )
+            
+            # Получаем клиент
+            from shared_auth_manager import shared_auth_manager
+            client = await shared_auth_manager.get_user_client(user.id)
+            
+            if not client:
+                await update.message.reply_text("❌ Не удалось подключиться к Telegram")
+                return
+            
+            # Получаем сообщения из группы
+            from datetime import timedelta
+            date_from = datetime.now(timezone.utc) - timedelta(hours=hours)
+            
+            logger.info(f"📨 Получение сообщений из группы {target_group.group_id}")
+            logger.info(f"   Период: с {date_from} до {datetime.now(timezone.utc)}")
+            logger.info(f"   Часов: {hours}")
+            
+            messages = []
+            total_fetched = 0
+            async for msg in client.iter_messages(
+                target_group.group_id,
+                limit=200,  # Лимит сообщений
+                offset_date=datetime.now(timezone.utc)
+            ):
+                total_fetched += 1
+                
+                # Конвертируем msg.date в timezone-aware если нужно
+                msg_date = msg.date
+                if msg_date.tzinfo is None:
+                    msg_date = msg_date.replace(tzinfo=timezone.utc)
+                else:
+                    msg_date = msg_date.astimezone(timezone.utc)
+                
+                if msg_date < date_from:
+                    break
+                    
+                if msg.text:  # Только текстовые сообщения
+                    messages.append(msg)
+            
+            logger.info(f"📊 Получено сообщений: {total_fetched} всего, {len(messages)} с текстом")
+            
+            if not messages:
+                await update.message.reply_text(
+                    f"📭 За последние {hours} часов в группе нет текстовых сообщений\n\n"
+                    f"Проверено сообщений: {total_fetched}"
+                )
+                return
+            
+            # Генерируем дайджест через n8n workflow
+            from group_digest_generator import group_digest_generator
+            
+            try:
+                digest = await group_digest_generator.generate_digest(
+                    user_id=db_user.id,
+                    group_id=target_group.id,
+                    messages=messages,
+                    hours=hours
+                )
+                
+                # Форматируем для Telegram
+                formatted = group_digest_generator.format_digest_for_telegram(
+                    digest=digest,
+                    group_title=target_group.group_title or str(target_group.group_id)
+                )
+                
+                # Отправляем результат
+                await update.message.reply_text(formatted, parse_mode='Markdown')
+                
+            except Exception as e:
+                logger.error(f"❌ Ошибка генерации дайджеста: {e}")
+                await update.message.reply_text(
+                    f"❌ Ошибка генерации дайджеста: {str(e)}\n\n"
+                    "Проверьте:\n"
+                    "• n8n workflows импортированы и активны\n"
+                    "• gpt2giga-proxy доступен"
+                )
+                
+        finally:
+            db.close()
+    
+    async def group_settings_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Настройки уведомлений для групп"""
+        user = update.effective_user
+        db = SessionLocal()
+        
+        try:
+            db_user = db.query(User).filter(User.telegram_id == user.id).first()
+            if not db_user:
+                await update.message.reply_text("❌ Пользователь не найден")
+                return
+            
+            # Получаем или создаем настройки
+            from models import GroupSettings
+            settings = db.query(GroupSettings).filter(
+                GroupSettings.user_id == db_user.id
+            ).first()
+            
+            if not settings:
+                # Создаем настройки по умолчанию
+                settings = GroupSettings(
+                    user_id=db_user.id,
+                    mentions_enabled=True,
+                    mention_context_messages=5,
+                    digest_default_hours=24,
+                    digest_max_messages=200
+                )
+                db.add(settings)
+                db.commit()
+            
+            # Показываем текущие настройки
+            text = "⚙️ **Настройки групп:**\n\n"
+            text += f"🔔 Уведомления об упоминаниях: {'✅ Включены' if settings.mentions_enabled else '❌ Выключены'}\n"
+            text += f"📨 Контекст упоминаний: {settings.mention_context_messages} сообщений\n"
+            text += f"⏰ Период дайджестов по умолчанию: {settings.digest_default_hours} часов\n"
+            text += f"📊 Макс. сообщений для анализа: {settings.digest_max_messages}\n\n"
+            text += "💡 Для изменения настроек используйте команды:\n"
+            text += "• `/group_settings mentions on|off` - вкл/выкл уведомления\n"
+            text += "• `/group_settings context <N>` - количество сообщений контекста\n"
+            text += "• `/group_settings digest_hours <N>` - период по умолчанию"
+            
+            # Обработка аргументов для изменения настроек
+            args = context.args
+            if args:
+                setting = args[0].lower()
+                
+                if setting == "mentions" and len(args) > 1:
+                    value = args[1].lower() in ['on', 'true', '1', 'yes']
+                    settings.mentions_enabled = value
+                    db.commit()
+                    text = f"✅ Уведомления об упоминаниях: {'включены' if value else 'выключены'}"
+                    
+                elif setting == "context" and len(args) > 1 and args[1].isdigit():
+                    value = int(args[1])
+                    if 1 <= value <= 20:
+                        settings.mention_context_messages = value
+                        db.commit()
+                        text = f"✅ Контекст установлен: {value} сообщений"
+                    else:
+                        text = "❌ Контекст должен быть от 1 до 20 сообщений"
+                
+                elif setting == "digest_hours" and len(args) > 1 and args[1].isdigit():
+                    value = int(args[1])
+                    if 1 <= value <= 168:  # Максимум неделя
+                        settings.digest_default_hours = value
+                        db.commit()
+                        text = f"✅ Период дайджестов по умолчанию: {value} часов"
+                    else:
+                        text = "❌ Период должен быть от 1 до 168 часов (неделя)"
+            
+            await update.message.reply_text(text, parse_mode='Markdown')
+            
+        except Exception as e:
+            await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+        finally:
+            db.close()
     
     async def button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработка нажатий на кнопки"""
@@ -1688,6 +2280,12 @@ class TelegramBot:
 /my\\_channels - Список ваших каналов
 /remove\\_channel - Удалить канал
 
+👥 **Управление группами:**
+/add\\_group <ссылка> - Добавить группу для мониторинга
+/my\\_groups - Список отслеживаемых групп
+/group\\_digest <часы> - Дайджест разговора (AI)
+/group\\_settings - Настройки уведомлений
+
 🤖 **RAG & AI:**
 /ask <вопрос> - Поиск ответа в постах
 /search <запрос> - Гибридный поиск (посты + веб)
@@ -1701,6 +2299,8 @@ class TelegramBot:
 • `/ask Что нового в AI?`
 • `/search квантовые компьютеры`
 • `/add_channel @durov`
+• `/add_group https://t.me/my\\_group`
+• `/group_digest 24`
 """
             
             # Админские команды

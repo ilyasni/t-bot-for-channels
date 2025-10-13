@@ -32,6 +32,7 @@ class TelegramSystem:
     def __init__(self):
         self.bot = None
         self.parser_service = None
+        self.group_monitor_service = None
         self.api_app = None
         self.is_running = False
     
@@ -50,6 +51,11 @@ class TelegramSystem:
             # Инициализируем бота (теперь в том же контейнере!)
             self.bot = TelegramBot()
             logger.info("✅ TelegramBot инициализирован")
+            
+            # Инициализируем Group Monitor Service
+            from group_monitor_service import group_monitor_service
+            self.group_monitor_service = group_monitor_service
+            logger.info("✅ GroupMonitorService инициализирован")
             
             return True
             
@@ -74,6 +80,18 @@ class TelegramSystem:
             await self.parser_service.start_scheduler(interval)
         except Exception as e:
             logger.error(f"❌ Ошибка запуска парсера: {str(e)}")
+    
+    async def start_group_monitor(self):
+        """Запуск мониторинга групп"""
+        try:
+            # Задержка чтобы дать боту и парсеру запуститься
+            await asyncio.sleep(5)
+            
+            logger.info("👀 Запуск мониторинга групп...")
+            monitors_started = await self.group_monitor_service.start_all_monitors()
+            logger.info(f"✅ Мониторинг запущен для {monitors_started} пользователей")
+        except Exception as e:
+            logger.error(f"❌ Ошибка запуска мониторинга групп: {str(e)}")
     
     def start_api(self):
         """Запуск API сервера"""
@@ -108,6 +126,10 @@ class TelegramSystem:
         asyncio.create_task(self.start_bot())
         logger.info("🤖 Telegram Bot запущен в async task")
         
+        # Запускаем Group Monitor в async task
+        asyncio.create_task(self.start_group_monitor())
+        logger.info("👀 Group Monitor запущен в async task")
+        
         # Запускаем API в отдельном потоке
         api_thread = threading.Thread(target=self.start_api, daemon=True)
         api_thread.start()
@@ -124,6 +146,8 @@ class TelegramSystem:
         self.is_running = False
         if self.parser_service:
             self.parser_service.stop()
+        if self.group_monitor_service:
+            asyncio.create_task(self.group_monitor_service.stop_all_monitors())
         logger.info("🛑 Система остановлена")
 
 

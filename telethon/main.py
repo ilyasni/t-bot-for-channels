@@ -1518,6 +1518,14 @@ async def get_stats_summary_api(
         InviteCode.expires_at > datetime.now(timezone.utc)
     ).count()
     
+    # Группы (новое)
+    from models import Group, GroupMention
+    total_groups = db.query(Group).count()
+    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    mentions_today = db.query(GroupMention).filter(
+        GroupMention.mentioned_at >= today
+    ).count()
+    
     return {
         "users": {
             "total": total_users,
@@ -1528,6 +1536,10 @@ async def get_stats_summary_api(
         "invites": {
             "total": total_invites,
             "active": active_invites
+        },
+        "groups": {
+            "total": total_groups,
+            "mentions_today": mentions_today
         }
     }
 
@@ -1588,6 +1600,160 @@ async def get_subscriptions_stats_api(
         subscriptions[sub_type] = count
     
     return subscriptions
+
+
+# ============================================================
+# Admin API - Groups Management
+# ============================================================
+
+@app.get("/api/admin/groups")
+@require_admin
+async def get_all_groups_api(
+    admin_id: int,
+    token: str,
+    db: Session = Depends(get_db)
+):
+    """Получить список всех групп в системе"""
+    from models import Group
+    
+    groups = db.query(Group).all()
+    
+    return {
+        "total": len(groups),
+        "groups": [
+            {
+                "id": g.id,
+                "group_id": g.group_id,
+                "group_title": g.group_title,
+                "group_username": g.group_username,
+                "created_at": g.created_at.isoformat() if g.created_at else None,
+                "users_count": len(g.users)
+            }
+            for g in groups
+        ]
+    }
+
+
+@app.get("/api/admin/user/{user_id}/groups")
+@require_admin
+async def get_user_groups_api(
+    user_id: int,
+    admin_id: int,
+    token: str,
+    db: Session = Depends(get_db)
+):
+    """Получить группы конкретного пользователя"""
+    from models import Group, user_group
+    
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Получаем группы с настройками
+    groups = db.query(Group).join(
+        user_group,
+        Group.id == user_group.c.group_id
+    ).filter(
+        user_group.c.user_id == user.id
+    ).all()
+    
+    result = []
+    for group in groups:
+        subscription = db.execute(
+            user_group.select().where(
+                (user_group.c.user_id == user.id) &
+                (user_group.c.group_id == group.id)
+            )
+        ).fetchone()
+        
+        result.append({
+            "id": group.id,
+            "group_id": group.group_id,
+            "group_title": group.group_title,
+            "group_username": group.group_username,
+            "is_active": subscription.is_active if subscription else False,
+            "mentions_enabled": subscription.mentions_enabled if subscription else False,
+            "created_at": subscription.created_at.isoformat() if subscription and subscription.created_at else None
+        })
+    
+    return {
+        "user_id": user_id,
+        "telegram_id": user.telegram_id,
+        "total_groups": len(result),
+        "groups": result
+    }
+
+
+@app.post("/api/admin/user/{user_id}/group/{group_id}/mentions")
+@require_admin
+async def toggle_group_mentions_api(
+    user_id: int,
+    group_id: int,
+    admin_id: int,
+    token: str,
+    enabled: bool,
+    db: Session = Depends(get_db)
+):
+    """Включить/выключить уведомления об упоминаниях для группы"""
+    from models import user_group
+    
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Обновляем настройку
+    db.execute(
+        user_group.update().where(
+            (user_group.c.user_id == user_id) &
+            (user_group.c.group_id == group_id)
+        ).values(mentions_enabled=enabled)
+    )
+    db.commit()
+    
+    return {
+        "success": True,
+        "user_id": user_id,
+        "group_id": group_id,
+        "mentions_enabled": enabled
+    }
+
+
+@app.get("/api/admin/stats/groups")
+@require_admin
+async def get_groups_stats_api(
+    admin_id: int,
+    token: str,
+    db: Session = Depends(get_db)
+):
+    """Статистика по группам"""
+    from models import Group, GroupMention
+    from datetime import timedelta
+    
+    total_groups = db.query(Group).count()
+    
+    # Упоминания за сегодня
+    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    mentions_today = db.query(GroupMention).filter(
+        GroupMention.mentioned_at >= today
+    ).count()
+    
+    # Упоминания за неделю
+    week_ago = datetime.now(timezone.utc) - timedelta(days=7)
+    mentions_week = db.query(GroupMention).filter(
+        GroupMention.mentioned_at >= week_ago
+    ).count()
+    
+    # Статус мониторинга
+    from group_monitor_service import group_monitor_service
+    monitor_status = group_monitor_service.get_status()
+    
+    return {
+        "total_groups": total_groups,
+        "mentions_today": mentions_today,
+        "mentions_week": mentions_week,
+        "active_monitors": monitor_status["active_monitors"],
+        "monitored_groups_total": monitor_status["monitored_groups_total"]
+    }
 
 
 # ============================================================

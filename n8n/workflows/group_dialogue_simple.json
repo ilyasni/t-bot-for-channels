@@ -1,0 +1,132 @@
+{
+  "name": "Group Dialogue Analyzer (Simple - No Agent4)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "group-digest-simple",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Подготовка данных для анализа\nconst items = $input.all();\nconst data = items[0].json.body || items[0].json;\n\nconst messages = data.messages || [];\nconst userId = data.user_id;\nconst groupId = data.group_id;\nconst hours = data.hours || 24;\n\nconst maxMessages = 200;\nconst limitedMessages = messages.slice(0, maxMessages);\n\n// Форматируем сообщения\nconst messagesText = limitedMessages.map((msg, idx) => \n  `[${idx + 1}] ${msg.username}: ${msg.text}`\n).join('\\n\\n');\n\n// Один промпт для всего анализа (вместо 4 агентов)\nconst fullPrompt = `Проанализируй диалог в Telegram группе за последние ${hours} часов.\\n\\nСообщения (${limitedMessages.length} шт):\\n${messagesText}\\n\\nВыполни полный анализ:\\n1. Извлеки 3-5 основных тем обсуждения\\n2. Опиши кто о чем говорил (топ-5 активных участников)\\n3. Создай краткое резюме всего диалога\\n\\nВерни результат в формате JSON:\\n{\\n  \"topics\": [\"тема1\", \"тема2\", \"тема3\"],\\n  \"speakers_summary\": {\\n    \"username1\": \"краткое описание что обсуждал\",\\n    \"username2\": \"краткое описание что обсуждал\"\\n  },\\n  \"overall_summary\": \"Краткое резюме всего диалога в 2-3 предложения\"\\n}\\n\\nВАЖНО: Верни ТОЛЬКО валидный JSON без markdown блоков!`;\n\nreturn [\n  {\n    json: {\n      user_id: userId,\n      group_id: groupId,\n      hours: hours,\n      message_count: limitedMessages.length,\n      full_prompt: fullPrompt\n    }\n  }\n];"
+      },
+      "id": "prepare-prompt",
+      "name": "Prepare Single Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://gpt2giga-proxy:8090/v1/chat/completions",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\"model\": \"GigaChat\", \"messages\": [{\"role\": \"system\", \"content\": \"Ты - аналитик диалогов. Анализируй разговоры в группах, извлекай темы, анализируй участников, создавай резюме. Всегда возвращай валидный JSON.\"}, {\"role\": \"user\", \"content\": $json.full_prompt}], \"temperature\": 0.3, \"max_tokens\": 800} }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "single-agent",
+      "name": "Single Agent Analysis",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Форматирование результата\nconst items = $input.all();\nconst response = items[0].json.choices?.[0]?.message?.content || '{}';\n\n// Получаем исходные данные\nconst sourceData = items[0].json;\nconst hours = sourceData.hours || 24;\nconst messageCount = sourceData.message_count || 0;\n\nlet finalResult = {\n  topics: [],\n  speakers_summary: {},\n  overall_summary: \"Анализ недоступен\",\n  message_count: messageCount,\n  period: `${hours} hours`\n};\n\ntry {\n  // Убираем markdown блоки\n  let cleanContent = response.trim();\n  if (cleanContent.startsWith('```')) {\n    const lines = cleanContent.split('\\n');\n    cleanContent = lines.slice(1, -1).join('\\n').trim();\n    if (cleanContent.startsWith('json')) {\n      cleanContent = cleanContent.slice(4).trim();\n    }\n  }\n  \n  // Парсим JSON\n  const parsed = JSON.parse(cleanContent);\n  \n  finalResult = {\n    topics: parsed.topics || [],\n    speakers_summary: parsed.speakers_summary || {},\n    overall_summary: parsed.overall_summary || \"Обсуждение различных тем\",\n    message_count: messageCount,\n    period: `${hours} hours`\n  };\n  \n} catch (e) {\n  console.error('Parse error:', e);\n  console.error('Response:', response.substring(0, 500));\n  \n  // Fallback: пытаемся извлечь JSON из текста\n  const jsonMatch = response.match(/\\{[\\s\\S]*\\}/);\n  if (jsonMatch) {\n    try {\n      const parsed = JSON.parse(jsonMatch[0]);\n      finalResult = {\n        topics: parsed.topics || [],\n        speakers_summary: parsed.speakers_summary || {},\n        overall_summary: parsed.overall_summary || \"Обсуждение различных тем\",\n        message_count: messageCount,\n        period: `${hours} hours`\n      };\n    } catch (e2) {\n      console.error('Fallback failed:', e2);\n    }\n  }\n}\n\nreturn [\n  {\n    json: finalResult\n  }\n];"
+      },
+      "id": "format-response",
+      "name": "Format Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      },
+      "id": "respond-webhook",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1050, 300]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Prepare Single Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Single Prompt": {
+      "main": [
+        [
+          {
+            "node": "Single Agent Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Single Agent Analysis": {
+      "main": [
+        [
+          {
+            "node": "Format Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Response": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "updatedAt": "2025-10-13T15:50:00.000Z",
+  "versionId": "simple"
+}
+

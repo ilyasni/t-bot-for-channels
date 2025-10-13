@@ -19,6 +19,17 @@ user_channel = Table(
     Column('last_parsed_at', DateTime, nullable=True)  # Время последнего парсинга для этого пользователя
 )
 
+# Промежуточная таблица для связи многие-ко-многим между User и Group
+user_group = Table(
+    'user_group',
+    Base.metadata,
+    Column('user_id', Integer, ForeignKey('users.id', ondelete='CASCADE'), primary_key=True),
+    Column('group_id', Integer, ForeignKey('groups.id', ondelete='CASCADE'), primary_key=True),
+    Column('is_active', Boolean, default=True),  # Активность мониторинга группы
+    Column('mentions_enabled', Boolean, default=True),  # Уведомления об упоминаниях в этой группе
+    Column('created_at', DateTime, default=lambda: datetime.now(timezone.utc))
+)
+
 class User(Base):
     __tablename__ = "users"
     
@@ -64,8 +75,14 @@ class User(Base):
         secondary=user_channel,
         back_populates="users"
     )
+    groups = relationship(
+        "Group",
+        secondary=user_group,
+        back_populates="users"
+    )
     posts = relationship("Post", back_populates="user", cascade="all, delete-orphan")
     digest_settings = relationship("DigestSettings", back_populates="user", uselist=False, cascade="all, delete-orphan")
+    group_settings = relationship("GroupSettings", back_populates="user", uselist=False, cascade="all, delete-orphan")
     query_history = relationship("RAGQueryHistory", back_populates="user", cascade="all, delete-orphan")
     
     # Связи для системы инвайтов и подписок
@@ -219,6 +236,19 @@ class User(Base):
             return False
         current_count = len(self.channels)
         return current_count < self.max_channels
+    
+    def can_add_group(self) -> bool:
+        """Проверка может ли пользователь добавить еще группу"""
+        if not self.check_subscription_active():
+            return False
+        
+        # Получаем лимит групп из subscription config
+        from subscription_config import get_subscription_info
+        subscription_info = get_subscription_info(self.subscription_type)
+        max_groups = subscription_info.get('max_groups', 0)
+        
+        current_count = len(self.groups)
+        return current_count < max_groups
 
 class Channel(Base):
     __tablename__ = "channels"
@@ -458,6 +488,139 @@ class RAGQueryHistory(Base):
     
     # Связи
     user = relationship("User", back_populates="query_history")
+
+
+class Group(Base):
+    """Telegram группы для мониторинга диалогов и упоминаний"""
+    __tablename__ = "groups"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    group_id = Column(BigInteger, unique=True, nullable=False, index=True)  # Telegram ID группы
+    group_title = Column(String, nullable=True)
+    group_username = Column(String, nullable=True, index=True)  # Username группы (если есть)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    
+    # Many-to-many с пользователями
+    users = relationship(
+        "User",
+        secondary=user_group,
+        back_populates="groups"
+    )
+    
+    @staticmethod
+    def get_or_create(db, group_id: int, group_title: str = None, group_username: str = None):
+        """
+        Получить существующую группу или создать новую
+        
+        Args:
+            db: Сессия базы данных
+            group_id: Telegram ID группы
+            group_title: Название группы
+            group_username: Username группы (без @)
+            
+        Returns:
+            Объект Group
+        """
+        group = db.query(Group).filter(Group.group_id == group_id).first()
+        
+        if not group:
+            group = Group(
+                group_id=group_id,
+                group_title=group_title,
+                group_username=group_username
+            )
+            db.add(group)
+            db.flush()  # Получаем ID без commit
+            logger.info(f"📢 Создана новая группа: {group_title or group_id}")
+        elif group_title and not group.group_title:
+            # Обновляем данные если они были None
+            group.group_title = group_title
+            if group_username:
+                group.group_username = group_username
+            logger.info(f"📢 Обновлены данные группы: {group_title}")
+        
+        return group
+    
+    def add_user(self, db, user, is_active: bool = True, mentions_enabled: bool = True):
+        """
+        Добавить пользователя к группе
+        
+        Args:
+            db: Сессия базы данных
+            user: Объект User
+            is_active: Активность мониторинга
+            mentions_enabled: Уведомления об упоминаниях
+        """
+        if user not in self.users:
+            self.users.append(user)
+            # Установим настройки через прямой SQL
+            db.execute(
+                user_group.update().where(
+                    (user_group.c.user_id == user.id) &
+                    (user_group.c.group_id == self.id)
+                ).values(is_active=is_active, mentions_enabled=mentions_enabled)
+            )
+            logger.info(f"✅ Пользователь {user.telegram_id} подключен к группе {self.group_title or self.group_id}")
+    
+    def remove_user(self, db, user):
+        """
+        Удалить пользователя из группы
+        
+        Args:
+            db: Сессия базы данных
+            user: Объект User
+        """
+        if user in self.users:
+            self.users.remove(user)
+            logger.info(f"🗑️ Пользователь {user.telegram_id} отключен от группы {self.group_title or self.group_id}")
+
+
+class GroupMention(Base):
+    """История упоминаний пользователя в группах"""
+    __tablename__ = "group_mentions"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    group_id = Column(Integer, ForeignKey("groups.id"), nullable=False, index=True)
+    message_id = Column(BigInteger, nullable=False)
+    mentioned_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+    
+    # AI-анализ упоминания
+    context = Column(Text, nullable=True)  # Контекст разговора
+    reason = Column(Text, nullable=True)  # Причина упоминания
+    urgency = Column(String, nullable=True)  # low, medium, high
+    
+    # Статус уведомления
+    notified = Column(Boolean, default=False)
+    notified_at = Column(DateTime, nullable=True)
+    
+    # Связи
+    user = relationship("User")
+    group = relationship("Group")
+    
+    # Уникальность комбинации user_id + group_id + message_id
+    __table_args__ = (
+        UniqueConstraint('user_id', 'group_id', 'message_id', name='uix_user_group_message'),
+    )
+
+
+class GroupSettings(Base):
+    """Настройки групп для пользователя"""
+    __tablename__ = "group_settings"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), unique=True, nullable=False)
+    
+    # Уведомления при упоминаниях
+    mentions_enabled = Column(Boolean, default=True)
+    mention_context_messages = Column(Integer, default=5)  # Сколько сообщений до/после брать для контекста
+    
+    # Дайджесты
+    digest_default_hours = Column(Integer, default=24)  # По умолчанию за 24 часа
+    digest_max_messages = Column(Integer, default=200)  # Макс сообщений для анализа
+    
+    # Связи
+    user = relationship("User", back_populates="group_settings")
 
 
 class InviteCode(Base):

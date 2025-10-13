@@ -1,0 +1,315 @@
+{
+  "name": "Group Dialogue Multi-Agent Analyzer",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "group-digest",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "webhookId": "group-digest-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Подготовка данных для multi-agent анализа\nconst items = $input.all();\nconst data = items[0].json;\n\n// Извлекаем параметры\nconst messages = data.messages || [];\nconst userId = data.user_id;\nconst groupId = data.group_id;\nconst hours = data.hours || 24;\n\n// Ограничиваем количество сообщений\nconst maxMessages = 200;\nconst limitedMessages = messages.slice(0, maxMessages);\n\n// Форматируем сообщения для анализа\nconst messagesText = limitedMessages.map((msg, idx) => \n  `[${idx + 1}] ${msg.username}: ${msg.text} (${msg.date})`\n).join('\\n');\n\n// Создаем промпты для каждого агента\nconst topicPrompt = `Проанализируй диалог в Telegram группе за последние ${hours} часов.\\n\\nСообщения:\\n${messagesText}\\n\\nИзвлеки 3-5 основных тем обсуждения. Верни ТОЛЬКО JSON массив тем:\\n{\"topics\": [\"тема1\", \"тема2\", \"тема3\"]}`;\n\nconst speakerPrompt = `Проанализируй кто о чем говорил в диалоге.\\n\\nСообщения:\\n${messagesText}\\n\\nСоздай краткое резюме по каждому активному участнику (топ-5). Верни ТОЛЬКО JSON:\\n{\"speakers\": {\"username1\": \"краткое описание\", \"username2\": \"краткое описание\"}}`;\n\nconst summaryPrompt = `Создай краткое резюме разговора в группе.\\n\\nСообщения:\\n${messagesText}\\n\\nВерни ТОЛЬКО JSON с кратким саммари (2-3 предложения):\\n{\"summary\": \"Краткое резюме...\"}`;\n\nreturn [\n  {\n    json: {\n      user_id: userId,\n      group_id: groupId,\n      hours: hours,\n      message_count: limitedMessages.length,\n      topic_prompt: topicPrompt,\n      speaker_prompt: speakerPrompt,\n      summary_prompt: summaryPrompt,\n      messages_text: messagesText\n    }\n  }\n];"
+      },
+      "id": "prepare-prompts",
+      "name": "Prepare Prompts",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://gpt2giga-proxy:8090/v1/chat/completions",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "model",
+              "value": "GigaChat"
+            },
+            {
+              "name": "messages",
+              "value": "={{[{\"role\": \"system\", \"content\": \"Ты - аналитик тем. Извлекай основные темы из диалога.\"}, {\"role\": \"user\", \"content\": $json.topic_prompt}]}}"
+            },
+            {
+              "name": "temperature",
+              "value": "0.3"
+            },
+            {
+              "name": "max_tokens",
+              "value": "300"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "agent-topic-extractor",
+      "name": "Agent 1: Topic Extractor",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [650, 200]
+    },
+    {
+      "parameters": {
+        "url": "http://gpt2giga-proxy:8090/v1/chat/completions",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "model",
+              "value": "GigaChat"
+            },
+            {
+              "name": "messages",
+              "value": "={{[{\"role\": \"system\", \"content\": \"Ты - аналитик коммуникаций. Анализируй кто о чем говорил.\"}, {\"role\": \"user\", \"content\": $json.speaker_prompt}]}}"
+            },
+            {
+              "name": "temperature",
+              "value": "0.3"
+            },
+            {
+              "name": "max_tokens",
+              "value": "400"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "agent-speaker-analyzer",
+      "name": "Agent 2: Speaker Analyzer",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://gpt2giga-proxy:8090/v1/chat/completions",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "model",
+              "value": "GigaChat"
+            },
+            {
+              "name": "messages",
+              "value": "={{[{\"role\": \"system\", \"content\": \"Ты - суммаризатор. Создавай краткие резюме разговоров.\"}, {\"role\": \"user\", \"content\": $json.summary_prompt}]}}"
+            },
+            {
+              "name": "temperature",
+              "value": "0.3"
+            },
+            {
+              "name": "max_tokens",
+              "value": "300"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "agent-summarizer",
+      "name": "Agent 3: Context Summarizer",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [650, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Объединение результатов от всех агентов\nconst items = $input.all();\n\n// Извлекаем ответы от каждого агента\nlet topicsData = {};\nlet speakersData = {};\nlet summaryData = {};\n\nfor (const item of items) {\n  const content = item.json.choices?.[0]?.message?.content || '{}';\n  \n  try {\n    const parsed = JSON.parse(content);\n    \n    if (parsed.topics) {\n      topicsData = parsed;\n    } else if (parsed.speakers) {\n      speakersData = parsed;\n    } else if (parsed.summary) {\n      summaryData = parsed;\n    }\n  } catch (e) {\n    // Попытка извлечь JSON из текста\n    const jsonMatch = content.match(/\\{[^}]+\\}/);\n    if (jsonMatch) {\n      try {\n        const parsed = JSON.parse(jsonMatch[0]);\n        if (parsed.topics) topicsData = parsed;\n        if (parsed.speakers) speakersData = parsed;\n        if (parsed.summary) summaryData = parsed;\n      } catch (e2) {\n        // Игнорируем ошибки парсинга\n      }\n    }\n  }\n}\n\n// Формируем финальный промпт для агрегатора\nconst aggregatorPrompt = `На основе анализа создай структурированный дайджест разговора:\\n\\nТемы: ${JSON.stringify(topicsData.topics || [])}\\nСпикеры: ${JSON.stringify(speakersData.speakers || {})}\\nОбщее резюме: ${summaryData.summary || 'не доступно'}\\n\\nСоздай финальный дайджест в формате JSON:\\n{\\n  \"topics\": [\"тема1\", \"тема2\"],\\n  \"speakers_summary\": {\"user1\": \"описание\"},\\n  \"overall_summary\": \"краткое описание всего диалога\",\\n  \"message_count\": число_сообщений\\n}`;\n\nreturn [\n  {\n    json: {\n      aggregator_prompt: aggregatorPrompt,\n      topics_raw: topicsData,\n      speakers_raw: speakersData,\n      summary_raw: summaryData,\n      // Сохраняем исходные данные из первого item\n      user_id: items[0].json.user_id,\n      group_id: items[0].json.group_id,\n      hours: items[0].json.hours,\n      message_count: items[0].json.message_count\n    }\n  }\n];"
+      },
+      "id": "merge-results",
+      "name": "Merge Agent Responses",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://gpt2giga-proxy:8090/v1/chat/completions",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "model",
+              "value": "GigaChat-Max"
+            },
+            {
+              "name": "messages",
+              "value": "={{[{\"role\": \"system\", \"content\": \"Ты - главный аналитик. Объединяй результаты анализа в структурированный дайджест.\"}, {\"role\": \"user\", \"content\": $json.aggregator_prompt}]}}"
+            },
+            {
+              "name": "temperature",
+              "value": "0.2"
+            },
+            {
+              "name": "max_tokens",
+              "value": "600"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 90000
+        }
+      },
+      "id": "agent-aggregator",
+      "name": "Agent 4: Aggregator",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Форматирование финального ответа\nconst items = $input.all();\nconst aggregatorResponse = items[0].json.choices?.[0]?.message?.content || '{}';\n\nlet finalResult = {\n  topics: [],\n  speakers_summary: {},\n  overall_summary: \"\",\n  message_count: items[0].json.message_count || 0,\n  period: `${items[0].json.hours || 24} hours`\n};\n\ntry {\n  // Парсим ответ агрегатора\n  const parsed = JSON.parse(aggregatorResponse);\n  finalResult = {\n    topics: parsed.topics || [],\n    speakers_summary: parsed.speakers_summary || {},\n    overall_summary: parsed.overall_summary || \"\",\n    message_count: parsed.message_count || items[0].json.message_count || 0,\n    period: `${items[0].json.hours || 24} hours`\n  };\n} catch (e) {\n  // Fallback: пытаемся извлечь JSON из текста\n  const jsonMatch = aggregatorResponse.match(/\\{[\\s\\S]*\\}/);\n  if (jsonMatch) {\n    try {\n      const parsed = JSON.parse(jsonMatch[0]);\n      finalResult = {\n        topics: parsed.topics || [],\n        speakers_summary: parsed.speakers_summary || {},\n        overall_summary: parsed.overall_summary || \"\",\n        message_count: parsed.message_count || items[0].json.message_count || 0,\n        period: `${items[0].json.hours || 24} hours`\n      };\n    } catch (e2) {\n      // Используем дефолтные значения\n      console.error('Failed to parse aggregator response:', e2);\n    }\n  }\n}\n\nreturn [\n  {\n    json: finalResult\n  }\n];"
+      },
+      "id": "format-response",
+      "name": "Format Final Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1250, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      },
+      "id": "respond-webhook",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1450, 300]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Prepare Prompts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Prompts": {
+      "main": [
+        [
+          {
+            "node": "Agent 1: Topic Extractor",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Agent 2: Speaker Analyzer",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Agent 3: Context Summarizer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agent 1: Topic Extractor": {
+      "main": [
+        [
+          {
+            "node": "Merge Agent Responses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agent 2: Speaker Analyzer": {
+      "main": [
+        [
+          {
+            "node": "Merge Agent Responses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agent 3: Context Summarizer": {
+      "main": [
+        [
+          {
+            "node": "Merge Agent Responses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Agent Responses": {
+      "main": [
+        [
+          {
+            "node": "Agent 4: Aggregator",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agent 4: Aggregator": {
+      "main": [
+        [
+          {
+            "node": "Format Final Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Final Response": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "telegram-groups",
+      "id": "telegram-groups-tag"
+    },
+    {
+      "name": "multi-agent",
+      "id": "multi-agent-tag"
+    }
+  ],
+  "triggerCount": 0,
+  "updatedAt": "2025-01-15T00:00:00.000Z",
+  "versionId": "1"
+}
+

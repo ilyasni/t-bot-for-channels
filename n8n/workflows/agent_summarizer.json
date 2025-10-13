@@ -1,0 +1,105 @@
+{
+  "name": "Agent: Context Summarizer",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "execute-workflow-trigger",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Prepare prompt for context summarization\nconst items = $input.all();\nconst data = items[0].json;\n\nconst messagesText = data.messages_text || \"\";\nconst hours = data.hours || 24;\n\nconst prompt = `Создай краткое резюме разговора в Telegram группе за последние ${hours} часов.\\n\\nСообщения:\\n${messagesText}\\n\\nВерни ТОЛЬКО JSON с кратким саммари (2-3 предложения):\\n{\"summary\": \"Краткое описание основных обсуждений и тем диалога\"}\\n\\nВАЖНО: Верни ТОЛЬКО валидный JSON без markdown блоков!`;\n\nreturn [\n  {\n    json: {\n      prompt: prompt,\n      hours: hours\n    }\n  }\n];"
+      },
+      "id": "prepare-prompt",
+      "name": "Prepare Summary Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://gpt2giga-proxy:8090/v1/chat/completions",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\"model\": \"GigaChat\", \"messages\": [{\"role\": \"system\", \"content\": \"Ты - аналитик контекста диалогов. Создавай краткие и информативные резюме разговоров. Всегда возвращай валидный JSON.\"}, {\"role\": \"user\", \"content\": $json.prompt}], \"temperature\": 0.3, \"max_tokens\": 300} }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "gigachat-call",
+      "name": "GigaChat: Summarize Context",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse GigaChat response and extract summary\nconst items = $input.all();\nconst response = items[0].json.choices?.[0]?.message?.content || '{}';\n\nlet summary = \"\";\n\ntry {\n  // Remove markdown code blocks if present\n  let cleanContent = response.trim();\n  if (cleanContent.startsWith('```')) {\n    const lines = cleanContent.split('\\n');\n    cleanContent = lines.slice(1, -1).join('\\n').trim();\n    if (cleanContent.startsWith('json')) {\n      cleanContent = cleanContent.slice(4).trim();\n    }\n  }\n  \n  // Parse JSON\n  const parsed = JSON.parse(cleanContent);\n  summary = parsed.summary || \"\";\n  \n} catch (e) {\n  console.error('Summary parse error:', e);\n  console.error('Response:', response.substring(0, 200));\n  \n  // Fallback: try to extract JSON from text\n  const jsonMatch = response.match(/\\{[\\s\\S]*?\\}/);\n  if (jsonMatch) {\n    try {\n      const parsed = JSON.parse(jsonMatch[0]);\n      summary = parsed.summary || \"\";\n    } catch (e2) {\n      console.error('Fallback parse failed:', e2);\n    }\n  }\n}\n\n// Fallback if empty\nif (!summary || summary.trim().length === 0) {\n  console.log('Summary empty, using fallback');\n  summary = \"Обсуждались различные темы\";\n}\n\n// Return summary\nreturn [\n  {\n    json: {\n      summary: summary\n    }\n  }\n];"
+      },
+      "id": "parse-response",
+      "name": "Parse Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850, 300]
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Prepare Summary Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Summary Prompt": {
+      "main": [
+        [
+          {
+            "node": "GigaChat: Summarize Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GigaChat: Summarize Context": {
+      "main": [
+        [
+          {
+            "node": "Parse Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "updatedAt": "2025-10-13T16:10:00.000Z",
+  "versionId": "1"
+}
+
