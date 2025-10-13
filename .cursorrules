@@ -1,21 +1,27 @@
 ---
 title: "Telegram Channel Parser Bot - Main Rules"
 description: "Entry point for Telegram Bot Cursor Rules system"
-version: "3.2.0"
+version: "3.3.0"
 priority: critical
+ruleType: "always"
 autoAttach: true
 scope:
   - "telethon/**/*.py"
   - "!telethon/tests/**"
+  - "!telethon/scripts/**"
 ---
 
 # Telegram Channel Parser Bot - Main Rules
 
-This file serves as the entry point for Telegram Bot Cursor Rules.
+> **Rule Type:** Always Applied  
+> **Lines:** < 500 (optimized for Cursor best practices)  
+> **Last Updated:** October 13, 2025
+
+This file serves as the **entry point** for the Telegram Bot Cursor Rules system.
 
 ## 🎯 Quick Start
 
-The rules are organized into **9 modular files** in `.cursor/rules/telegram-bot/`:
+The rules are organized into **10 modular files** in `.cursor/rules/telegram-bot/`:
 
 1. **01-core.mdc** (Always loaded) - Critical patterns and project structure
 2. **02-architecture.mdc** - Microservices architecture
@@ -26,6 +32,7 @@ The rules are organized into **9 modular files** in `.cursor/rules/telegram-bot/
 7. **07-rag.mdc** - RAG system, vector search
 8. **08-api.mdc** - FastAPI endpoints
 9. **09-external.mdc** - External services integration
+10. **10-groups.mdc** - Groups дайджесты, упоминания, n8n workflows
 
 ## 🔴 Critical Rules (Always Apply)
 
@@ -196,33 +203,38 @@ After generating code, AI should automatically verify:
    - [ ] Graceful degradation with fallbacks
    - [ ] Proper HTTP exception status codes
 
-## 🚨 Consequences of Violation
+## 🧪 Testing Your Changes
 
-**Ignoring Context7:**
-- ❌ Using outdated API patterns
-- ❌ Bugs from incorrect library usage
-- ❌ Suboptimal code not following best practices
-- ❌ Time wasted fixing preventable errors
-- ❌ Incompatibility with current versions
+**Before committing code, verify:**
 
-**SQLite fallback:**
-- ❌ Production deployment fails
-- ❌ Timezone handling breaks
-- ❌ Concurrent access issues
+```bash
+# 1. Linter passes
+ruff check . --fix
 
-**Naive datetime:**
-- ❌ Wrong `expires_at` comparisons
-- ❌ PostgreSQL save errors
-- ❌ Incorrect user timezone display
+# 2. Type checking
+mypy telethon/ --ignore-missing-imports
 
-**Missing user_id filter:**
-- ❌ Data leak between users
-- ❌ Critical security vulnerability
+# 3. Tests pass
+pytest tests/ -v
 
-**Blocking operations:**
-- ❌ Event loop blocked
-- ❌ API timeouts
-- ❌ Poor performance
+# 4. No sensitive data
+git diff --cached | grep -i "password\|secret\|token\|api_key"
+
+# 5. Docker rebuild successful
+docker-compose up -d --build telethon
+docker logs telethon --tail 50 | grep -E "(✅|ERROR)"
+```
+
+## 🚨 Common Pitfalls & Solutions
+
+| Problem | Consequence | Solution |
+|---------|-------------|----------|
+| **No Context7** | Outdated API patterns, bugs | Always query Context7 first |
+| **SQLite fallback** | Production fails | Raise error if not PostgreSQL |
+| **Naive datetime** | Wrong comparisons, PostgreSQL errors | Always `datetime.now(timezone.utc)` |
+| **No user_id filter** | Data leak, security breach | Filter all queries by user_id |
+| **Blocking operations** | Event loop blocked, timeouts | Use async (`httpx`, not `requests`) |
+| **No Redis prefix** | Key conflicts | Always use `prefix:key` pattern |
 
 ## 🔀 Conflict Resolution Priority
 

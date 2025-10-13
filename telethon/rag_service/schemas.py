@@ -166,8 +166,8 @@ class CollectionStatsResponse(BaseModel):
     """Статистика коллекции пользователя"""
     user_id: int
     collection_name: str
-    vectors_count: int
-    points_count: int
+    vectors_count: int = 0  # Default 0 если коллекция не существует
+    points_count: int = 0   # Default 0 если коллекция не существует
     indexed_posts: int
     pending_posts: int
     failed_posts: int

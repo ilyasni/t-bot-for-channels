@@ -6,8 +6,8 @@ uvicorn[standard]==0.27.0
 pydantic==2.5.3
 python-dotenv==1.0.0
 
-# Vector DB
-qdrant-client==1.7.0
+# Vector DB  
+qdrant-client==1.15.0  # Обновлено: совместимость с Qdrant 1.15+ API
 
 # Tokenizer (легкий, ~2MB)
 tiktoken==0.5.2

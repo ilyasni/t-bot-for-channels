@@ -69,6 +69,10 @@ class User(Base):
     max_channels = Column(Integer, default=3)  # Лимит каналов по подписке
     invited_by = Column(Integer, ForeignKey("users.id"), nullable=True)  # Кто пригласил
     
+    # Voice transcription statistics (Premium/Enterprise feature)
+    voice_queries_today = Column(Integer, default=0)  # Голосовых запросов сегодня
+    voice_queries_reset_at = Column(DateTime(timezone=True), nullable=True)  # Время сброса счетчика
+    
     # Связи
     channels = relationship(
         "Channel",

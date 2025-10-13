@@ -301,11 +301,22 @@ class QdrantClient:
         
         try:
             info = self.client.get_collection(collection_name=collection_name)
+            # Qdrant 1.15+ изменил структуру ответа
+            vectors_count = 0
+            points_count = 0
+            
+            if hasattr(info, 'vectors_count') and info.vectors_count is not None:
+                vectors_count = info.vectors_count
+            elif hasattr(info, 'points_count') and info.points_count is not None:
+                # В новых версиях vectors_count может быть в points_count
+                points_count = info.points_count
+                vectors_count = info.points_count
+            
             return {
                 "name": collection_name,
-                "vectors_count": info.vectors_count,
-                "points_count": info.points_count,
-                "status": info.status
+                "vectors_count": vectors_count,
+                "points_count": points_count,
+                "status": getattr(info, 'status', 'unknown')
             }
             
         except Exception as e:

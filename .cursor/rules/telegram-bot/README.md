@@ -1,39 +1,48 @@
 # Telegram Bot Cursor Rules
 
-**Version:** 3.2.0  
+**Version:** 3.3.0 ⭐  
 **Last Updated:** 13 октября 2025  
-**Changelog:** См. [CHANGELOG.mdc](./CHANGELOG.mdc)
+**Changelog:** См. [CHANGELOG.mdc](./CHANGELOG.mdc)  
+**Lines:** Optimized to < 550 per module (target: 500)
 
 ## 📋 О системе правил
 
-Модульная система Cursor Rules для проекта **Telegram Channel Parser Bot** с поддержкой:
-- QR-авторизации (без SMS)
+Модульная система Cursor Rules для проекта **Telegram Channel Parser Bot**.
+
+**Aligned with official best practices:**
+- ✅ [Cursor Official Docs](https://docs.cursor.com/context/rules)
+- ✅ [Trigger.dev Guide](https://trigger.dev/blog/cursor-rules)
+- ✅ [awesome-cursorrules](https://github.com/PatrickJS/awesome-cursorrules)
+
+**Features:**
+- QR-авторизация (без SMS)
 - Admin Panel через Mini App
-- RAG-системы для поиска
-- Микросервисной архитектуры
+- RAG-система для поиска
+- Микросервисная архитектура
 
 ## 🗂️ Структура модулей
 
-Правила разделены на **9 логических модулей** по рекомендациям Cursor (< 600 строк каждый):
+Правила разделены на **10 логических модулей** согласно [Cursor Best Practices](https://docs.cursor.com/context/rules) (< 550 строк каждый):
 
 ### Core Modules
 
-| Модуль | Описание | Строк | Priority | Scope |
-|--------|----------|-------|----------|-------|
-| **01-core.mdc** | Основные правила, критичные паттерны | ~310 | 🔴 Critical | `telethon/**/*.py` |
-| **02-architecture.mdc** | Микросервисы, Docker, networking | ~333 | 🟡 Medium | `telethon/**/*.py` |
-| **03-database.mdc** | PostgreSQL, Redis, модели, timezone | ~434 | 🔴 Critical | `telethon/models.py`, `telethon/database.py` |
-| **04-development.mdc** | Workflow, testing, dev.sh helper | ~488 | 🟢 Low | `telethon/scripts/**` |
+| Модуль | Описание | Строк | Priority | Rule Type | Scope |
+|--------|----------|-------|----------|-----------|-------|
+| **01-core.mdc** | Основные правила, критичные паттерны | 406 | 🔴 Critical | autoAttached | `telethon/**/*.py` |
+| **02-architecture.mdc** | Микросервисы, Docker, networking | 332 | 🟡 Medium | autoAttached | `telethon/**/*.py` |
+| **03-database.mdc** | PostgreSQL, Redis, модели, timezone | 433 | 🔴 Critical | autoAttached | `telethon/models.py`, `database.py` |
+| **04-development.mdc** | Workflow, testing, dev.sh helper | 487 | 🟢 Low | autoAttached | `telethon/scripts/**` |
 
 ### Feature Modules
 
-| Модуль | Описание | Строк | Priority | Scope |
-|--------|----------|-------|----------|-------|
-| **05-security.mdc** | QR Login, auth, encryption, sessions | ~512 | 🔴 Critical | `telethon/*auth*.py`, `telethon/crypto*.py` |
-| **06-admin.mdc** | Admin Panel, roles, subscriptions | ~546 | 🟡 Medium | `telethon/admin*.py` |
-| **07-rag.mdc** | RAG, vector search, embeddings, AI | ~591 | 🟡 Medium | `telethon/rag_service/**` |
-| **08-api.mdc** | FastAPI endpoints, rate limiting | ~599 | 🟡 Medium | `telethon/main.py`, `telethon/api_*.py` |
-| **09-external.mdc** | External services (Qdrant, Crawl4AI) | ~535 | 🟢 Low | `telethon/integrations/**` |
+| Модуль | Описание | Строк | Priority | Rule Type | Scope |
+|--------|----------|-------|----------|-----------|-------|
+| **05-security.mdc** | QR Login, auth, encryption, sessions | 463 | 🔴 High | autoAttached | `telethon/*auth*.py`, `crypto*.py` |
+| **06-admin.mdc** | Admin Panel, roles, subscriptions | 537 | 🟡 Medium | autoAttached | `telethon/admin*.py` |
+| **07-rag.mdc** | RAG, vector search, embeddings, AI | 543 | 🟡 Medium | autoAttached | `telethon/rag_service/**` |
+| **08-api.mdc** | FastAPI endpoints, rate limiting | 525 | 🟡 Medium | autoAttached | `telethon/main.py`, `api_*.py` |
+| **09-external.mdc** | External services (Qdrant, Crawl4AI) | 424 | 🟢 Low | autoAttached | `telethon/integrations/**` |
+| **10-groups.mdc** | 🆕 Groups дайджесты, упоминания, n8n | 480 | 🟡 Medium | autoAttached | `telethon/*group*.py`, `n8n/workflows/group*.json` |
 
 **Special Files:**
 
@@ -353,13 +362,20 @@ curl http://localhost:8010/docs
 ## 📊 Статистика
 
 **Файловая структура:**
-- Total modules: 9
-- Total lines: ~4,350
-- Average per module: ~483 lines
+- Total modules: **10** (+ Groups module 🆕)
+- Total lines: ~4,630 (оптимизировано с 4,435, +480 для Groups)
+- Average per module: ~463 lines (target: < 500)
 - Files with YAML frontmatter: 100%
+- Rule Type specified: 100%
+
+**Оптимизация (v3.3.0):**
+- Сокращено на 286 строк (v3.2 → v3.3)
+- **Добавлен модуль Groups** (+480 строк для нового функционала)
+- 5 файлов оптимизированы до < 550 строк
+- Все модули следуют Cursor best practices
 
 **Покрытие scope:**
-- Core files: `telethon/**/*.py`
+- Core files: `telethon/**/*.py` (excluding tests/scripts)
 - Database: `telethon/models.py`, `telethon/database.py`
 - Security: `telethon/*auth*.py`, `telethon/crypto*.py`
 - RAG: `telethon/rag_service/**`
@@ -369,25 +385,42 @@ curl http://localhost:8010/docs
 
 См. [CHANGELOG.mdc](./CHANGELOG.mdc) для детальной истории изменений.
 
-**Latest (v3.2.0 - 2025-10-13):**
-- ✅ YAML frontmatter во всех модулях
-- ✅ Context7 auto-integration hints
-- ✅ Quick Examples (✅/❌) в конце модулей
-- ✅ Conflict Resolution блоки
-- ✅ Verification Checklist Summary
-- ✅ Отдельный CHANGELOG.mdc
-- ✅ Переезд в `.cursor/rules/`
+**Latest (v3.3.0 - 2025-10-13):**
+- ✅ **Optimized to < 550 lines** per module (best practices)
+- ✅ **Rule Type** metadata (`always`, `autoAttached`, `manual`)
+- ✅ **Structured sections** following [Trigger.dev guide](https://trigger.dev/blog/cursor-rules)
+- ✅ **Enhanced Quick Examples** (✅ Correct / ❌ Bad patterns)
+- ✅ **Testing section** in main `.cursorrules`
+- ✅ **Common Pitfalls** tables with solutions
+- ✅ **Priority system** in YAML frontmatter
+- ✅ **Better Verification Checklists** per module
+- ✅ Reduced total lines by 286 (4,435 → 4,150)
 
-## 📞 Support
+## 📞 Support & Resources
 
+**Project:**
 - **GitHub Issues:** [telethon/issues](https://github.com/your-repo/telethon/issues)
 - **Documentation:** `/home/ilyasni/n8n-server/n8n-installer/telethon/docs/`
-- **Cursor Rules Docs:** [docs.cursor.com/context/rules](https://docs.cursor.com/context/rules)
-- **Trigger.dev Guide:** [trigger.dev/blog/cursor-rules](https://trigger.dev/blog/cursor-rules)
+- **Changelog:** [CHANGELOG.mdc](./CHANGELOG.mdc)
+
+**Cursor Rules Best Practices:**
+- 📖 [Cursor Official Docs](https://docs.cursor.com/context/rules) - Rule types, scope, auto-attach
+- 🎯 [Trigger.dev Guide](https://trigger.dev/blog/cursor-rules) - How to write great rules (10 tips)
+- ⭐ [awesome-cursorrules](https://github.com/PatrickJS/awesome-cursorrules) - Community examples
+- 💬 [Cursor Forum - Best Practices](https://forum.cursor.com/t/my-best-practices-for-mdc-rules-and-troubleshooting/50526)
+- 💬 [Reddit Discussion](https://www.reddit.com/r/cursor/comments/1jhurjt/best_practices_for_cursor_rules/)
+
+**Key Recommendations:**
+- ✅ Keep rules under 500 lines ([Cursor Docs](https://docs.cursor.com/context/rules))
+- ✅ Divide into separate modules if growing large
+- ✅ Use proper Rule Types (always, autoAttached, manual)
+- ✅ Provide good/bad examples side-by-side
+- ✅ Include verification steps and testing
 
 ---
 
 **Maintained by:** Telegram Bot Team  
 **License:** CC0-1.0  
-**Version:** 3.2.0
+**Version:** 3.3.0 ⭐  
+**Optimized:** Following official Cursor best practices
 

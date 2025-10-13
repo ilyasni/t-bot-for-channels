@@ -2,12 +2,102 @@
 title: "Cursor Rules Changelog"
 description: "История изменений правил для Telegram Bot"
 tags: ["changelog", "versioning"]
-version: "3.2"
+version: "3.3"
 priority: low
+ruleType: "manual"
 autoAttach: false
 ---
 
 # Cursor Rules Changelog
+
+## [3.3.0] - 2025-10-13
+
+### 🎯 Optimization Release + Groups Module
+
+**Aligned with official Cursor best practices:**
+- ✅ All modules now < 550 lines (target: 500)
+- ✅ Added `ruleType` specification to all modules
+- ✅ Improved structure following Trigger.dev guide
+- ✅ Enhanced Quick Examples (✅/❌) sections
+- ✅ Better Verification Checklists
+- ✅ Testing section in main `.cursorrules`
+- ✅ Common Pitfalls tables
+
+**🆕 New Module:**
+- ✅ **10-groups.mdc** (480 lines) - Groups functionality
+  - Database models (Group, GroupMention, GroupSettings)
+  - Bot commands (/add_group, /group_digest, /my_groups)
+  - n8n Multi-Agent Workflows (Sub-workflows architecture)
+  - Markdown V2 escaping patterns
+  - Private groups support
+  - AI digest generation via n8n
+
+### 📏 File Size Optimization
+
+| Module | Before | After | Reduction |
+|--------|--------|-------|-----------|
+| 05-security.mdc | 511 | 463 | -48 lines |
+| 06-admin.mdc | 545 | 537 | -8 lines |
+| 07-rag.mdc | 590 | 543 | -47 lines |
+| 08-api.mdc | 598 | 525 | -73 lines |
+| 09-external.mdc | 534 | 424 | -110 lines |
+
+**Total reduction:** 286 lines across 5 files
+
+### ✨ New Features
+
+- **Rule Type Metadata**
+  - `always` - Main `.cursorrules`
+  - `autoAttached` - Context-specific modules
+  - `manual` - CHANGELOG, README
+
+- **Structured Sections** (following Trigger.dev guide)
+  - High-Level Overview with essential info
+  - Critical Patterns (first, not buried)
+  - Essential elements before examples
+  - Verification Checklist per module
+  - Quick Examples (✅ Correct / ❌ Bad)
+  - Common Pitfalls with solutions
+
+- **Testing Section** in `.cursorrules`
+  - Pre-commit checklist
+  - Linter, type checker, tests
+  - Sensitive data check
+  - Docker rebuild verification
+
+- **Priority System** in YAML frontmatter
+  - `critical` - Core rules (01-core, 03-database, 05-security)
+  - `high` - Architecture, development
+  - `medium` - Features (admin, RAG, API)
+  - `low` - External services, changelog
+
+### 🔧 Improved
+
+- **Better Code Examples**
+  - Removed redundant full endpoint implementations
+  - Focused on patterns, not complete code
+  - More "what NOT to do" examples
+  - Side-by-side correct/incorrect patterns
+
+- **Clearer Scope**
+  - More specific file patterns
+  - Exclusions (`!` syntax) for tests/scripts
+  - Better auto-attachment logic
+
+- **Documentation Links**
+  - References to official Cursor docs
+  - Links to Trigger.dev guide
+  - awesome-cursorrules references
+
+### 📝 References
+
+Based on official recommendations:
+- [Cursor Docs - Rules](https://docs.cursor.com/context/rules)
+- [Trigger.dev - How to write great Cursor Rules](https://trigger.dev/blog/cursor-rules)
+- [awesome-cursorrules](https://github.com/PatrickJS/awesome-cursorrules)
+- [Cursor Forum - Best Practices](https://forum.cursor.com/t/my-best-practices-for-mdc-rules-and-troubleshooting/50526)
+
+---
 
 ## [3.2.0] - 2025-10-13
 

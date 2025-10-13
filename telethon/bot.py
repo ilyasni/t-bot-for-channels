@@ -1,4 +1,4 @@
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackQueryHandler, 
     ContextTypes, filters, PicklePersistence
@@ -28,6 +28,8 @@ from bot_debug_commands import (
     debug_test_phone_command, debug_check_sessions_command, debug_force_auth_command,
     debug_reset_auth_command, debug_delete_user_command
 )
+from voice_transcription_service import voice_transcription_service
+from subscription_config import SUBSCRIPTION_TIERS
 
 logging.basicConfig(
     level=logging.INFO,
@@ -255,13 +257,26 @@ class TelegramBot:
         self.application.add_handler(get_admin_callback_handler())  # ✅ НОВОЕ: Админ callbacks
         self.application.add_handler(CallbackQueryHandler(self.button_callback))
         
+        # ✅ НОВОЕ: Голосовые сообщения для /ask и /search (Premium)
+        self.application.add_handler(MessageHandler(
+            filters.VOICE & ~filters.COMMAND,
+            self.handle_voice_command
+        ))
+        logger.info("  ✅ Handler голосовых сообщений зарегистрирован")
+        
+        # Команда сброса состояния голосовых команд
+        self.application.add_handler(CommandHandler("reset", self.reset_command))
+        
         # Текстовые сообщения (должен быть последним!)
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text))
         
-        logger.info("✅ Все обработчики зарегистрированы (включая ConversationHandler и Persistence)")
+        logger.info("✅ Все обработчики зарегистрированы (включая голосовые команды и Persistence)")
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработка команды /start"""
+        # Сбрасываем last_command чтобы голосовые использовали AI классификатор
+        context.user_data.pop('last_command', None)
+        
         user = update.effective_user
         db = SessionLocal()
         
@@ -666,6 +681,9 @@ class TelegramBot:
     
     async def my_channels_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Показать каналы пользователя"""
+        # Сбрасываем last_command чтобы голосовые использовали AI классификатор
+        context.user_data.pop('last_command', None)
+        
         user = update.effective_user
         db = SessionLocal()
         
@@ -1007,6 +1025,9 @@ class TelegramBot:
     
     async def my_groups_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Показать список отслеживаемых групп"""
+        # Сбрасываем last_command чтобы голосовые использовали AI классификатор
+        context.user_data.pop('last_command', None)
+        
         user = update.effective_user
         db = SessionLocal()
         
@@ -1069,6 +1090,9 @@ class TelegramBot:
     
     async def group_digest_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Сгенерировать дайджест разговора в группе"""
+        # Сбрасываем last_command чтобы голосовые использовали AI классификатор
+        context.user_data.pop('last_command', None)
+        
         user = update.effective_user
         args = context.args
         
@@ -1315,6 +1339,12 @@ class TelegramBot:
             logger.info(f"  → Обработка remove_channel: {query.data}")
             channel_id = int(query.data.split("_")[1])
             await self.remove_channel_by_id(query, channel_id)
+        elif query.data.startswith("voice_ask:"):
+            logger.info(f"  → Обработка voice_ask callback")
+            await self.handle_voice_ask_callback(query, context)
+        elif query.data.startswith("voice_search:"):
+            logger.info(f"  → Обработка voice_search callback")
+            await self.handle_voice_search_callback(query, context)
         elif query.data.startswith("digest_"):
             logger.info(f"  → Обработка digest callback: {query.data}")
             await self.handle_digest_callback(query, context)
@@ -1374,6 +1404,37 @@ class TelegramBot:
         """Обработка текстовых сообщений"""
         user = update.effective_user
         text = update.message.text
+        
+        # Обработка кнопок режима голосовых команд
+        if text in ["🤖 AI режим", "💡 Ask режим", "🔍 Search режим"]:
+            if text == "🤖 AI режим":
+                context.user_data['voice_mode'] = 'ai'
+                context.user_data.pop('last_command', None)
+                context.user_data.pop('last_command_time', None)
+                await update.message.reply_text(
+                    "✅ Режим: 🤖 **AI классификатор**\n\n"
+                    "Голосовые сообщения будут автоматически определяться как /ask или /search",
+                    reply_markup=self.get_voice_mode_keyboard()
+                )
+            elif text == "💡 Ask режим":
+                context.user_data['voice_mode'] = 'ask'
+                context.user_data['last_command'] = '/ask'
+                context.user_data['last_command_time'] = datetime.now(timezone.utc)
+                await update.message.reply_text(
+                    "✅ Режим: 💡 **Ask**\n\n"
+                    "Все голосовые сообщения будут выполняться как /ask",
+                    reply_markup=self.get_voice_mode_keyboard()
+                )
+            elif text == "🔍 Search режим":
+                context.user_data['voice_mode'] = 'search'
+                context.user_data['last_command'] = '/search'
+                context.user_data['last_command_time'] = datetime.now(timezone.utc)
+                await update.message.reply_text(
+                    "✅ Режим: 🔍 **Search**\n\n"
+                    "Все голосовые сообщения будут выполняться как /search",
+                    reply_markup=self.get_voice_mode_keyboard()
+                )
+            return
         
         # Очищаем устаревшие состояния
         self._cleanup_expired_states()
@@ -1472,13 +1533,24 @@ class TelegramBot:
         user = update.effective_user
         args = context.args
         
+        # Сохраняем команду для голосовых сообщений (с таймстампом)
+        context.user_data['last_command'] = '/ask'
+        context.user_data['last_command_time'] = datetime.now(timezone.utc)
+        
         if not args:
             await update.message.reply_text(
                 "💡 **Использование:** `/ask <ваш вопрос>`\n\n"
                 "**Примеры:**\n"
                 "• `/ask Что писали про нейросети на этой неделе?`\n"
                 "• `/ask Какие новости про Tesla?`\n"
-                "• `/ask Расскажи о блокчейн технологиях`",
+                "• `/ask Расскажи о блокчейн технологиях`\n\n"
+                "🎤 **Голосовой ввод (Premium/Enterprise):**\n"
+                "1️⃣ Отправьте эту команду `/ask`\n"
+                "2️⃣ Отправьте голосовое с вопросом\n"
+                "   → Автоматически выполнится поиск!\n\n"
+                "💡 **Альтернатива:**\n"
+                "• Отправьте голосовое БЕЗ команды\n"
+                "• Выберите кнопку \"💡 /ask\"",
                 parse_mode='Markdown'
             )
             return
@@ -1647,6 +1719,10 @@ class TelegramBot:
         user = update.effective_user
         args = context.args
         
+        # Сохраняем команду для голосовых сообщений (с таймстампом)
+        context.user_data['last_command'] = '/search'
+        context.user_data['last_command_time'] = datetime.now(timezone.utc)
+        
         if not args:
             await update.message.reply_text(
                 "🔍 **Использование:** `/search <запрос>`\n\n"
@@ -1654,7 +1730,14 @@ class TelegramBot:
                 "• `/search квантовые компьютеры`\n"
                 "• `/search искусственный интеллект`\n"
                 "• `/search блокчейн технологии`\n\n"
-                "Поиск осуществляется в ваших постах + в интернете через Searxng",
+                "Поиск осуществляется в ваших постах + в интернете через Searxng\n\n"
+                "🎤 **Голосовой ввод (Premium/Enterprise):**\n"
+                "1️⃣ Отправьте эту команду `/search`\n"
+                "2️⃣ Отправьте голосовое с запросом\n"
+                "   → Автоматически выполнится поиск!\n\n"
+                "💡 **Альтернатива:**\n"
+                "• Отправьте голосовое БЕЗ команды\n"
+                "• Выберите кнопку \"🔍 /search\"",
                 parse_mode='Markdown'
             )
             return
@@ -1946,6 +2029,451 @@ class TelegramBot:
         except Exception as e:
             logger.error(f"❌ Ошибка команды /digest: {e}")
             await update.message.reply_text(f"❌ Произошла ошибка: {str(e)}")
+        finally:
+            db.close()
+    
+    async def handle_voice_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """
+        Обработка голосовых сообщений для команд /ask и /search
+        
+        Premium/Enterprise only feature
+        """
+        user = update.effective_user
+        voice = update.message.voice
+        
+        db = SessionLocal()
+        
+        try:
+            # 1. Получаем пользователя
+            db_user = db.query(User).filter(User.telegram_id == user.id).first()
+            
+            if not db_user:
+                await update.message.reply_text(
+                    "❌ Пользователь не найден. Используйте /start для регистрации"
+                )
+                return
+            
+            # 2. Проверка аутентификации
+            if not db_user.is_authenticated:
+                await update.message.reply_text(
+                    "❌ Для использования голосовых команд необходимо пройти аутентификацию.\n"
+                    "Используйте команду /login <INVITE_CODE>"
+                )
+                return
+            
+            # 3. Проверка подписки (premium/enterprise only)
+            tier = SUBSCRIPTION_TIERS.get(db_user.subscription_type, {})
+            voice_enabled = tier.get("voice_transcription_enabled", False)
+            
+            if not voice_enabled:
+                await update.message.reply_text(
+                    "🎤 **Голосовые команды доступны только для Premium/Enterprise подписки**\n\n"
+                    f"Ваша подписка: {db_user.subscription_type}\n\n"
+                    "💡 Обновите подписку для использования голосовых команд:\n"
+                    "/subscription",
+                    parse_mode='Markdown'
+                )
+                return
+            
+            # 4. Проверка лимитов
+            voice_limit = tier.get("voice_queries_per_day", 0)
+            
+            # Reset счетчика если новый день
+            now = datetime.now(timezone.utc)
+            if db_user.voice_queries_reset_at is None or db_user.voice_queries_reset_at < now:
+                db_user.voice_queries_today = 0
+                db_user.voice_queries_reset_at = now.replace(
+                    hour=0, minute=0, second=0, microsecond=0
+                ) + timedelta(days=1)
+                db.commit()
+            
+            if db_user.voice_queries_today >= voice_limit:
+                await update.message.reply_text(
+                    f"❌ Достигнут дневной лимит голосовых запросов: {voice_limit}\n\n"
+                    f"Попробуйте завтра или обновите подписку: /subscription",
+                    parse_mode='Markdown'
+                )
+                return
+            
+            # 5. Проверка длительности
+            duration = voice.duration
+            max_duration = int(os.getenv("VOICE_MAX_DURATION_SEC", "60"))
+            
+            if duration > max_duration:
+                await update.message.reply_text(
+                    f"❌ Голосовое сообщение слишком длинное: {duration}s\n\n"
+                    f"Максимальная длительность: {max_duration} секунд\n\n"
+                    f"💡 Попробуйте записать более короткое сообщение"
+                )
+                return
+            
+            # 6. Проверка доступности сервиса
+            if not voice_transcription_service.is_enabled():
+                await update.message.reply_text(
+                    "❌ Сервис транскрибации временно недоступен\n\n"
+                    "💡 Попробуйте позже или используйте текстовые команды"
+                )
+                return
+            
+            # 7. Уведомление о процессе
+            status_message = await update.message.reply_text(
+                f"🎤 Обрабатываю голосовое сообщение ({duration}s)...\n"
+                "⏳ Это может занять 5-10 секунд"
+            )
+            
+            try:
+                # 8. Скачиваем голосовое
+                voice_file = await voice.get_file()
+                voice_bytes = await voice_file.download_as_bytearray()
+                
+                # 9. Транскрибация через SaluteSpeech
+                transcription = await voice_transcription_service.transcribe_voice_message(
+                    bytes(voice_bytes),
+                    duration
+                )
+                
+                if not transcription:
+                    await status_message.edit_text(
+                        "❌ Не удалось распознать речь в голосовом сообщении\n\n"
+                        "💡 Попробуйте:\n"
+                        "• Говорить четче и медленнее\n"
+                        "• Записать в тихом месте\n"
+                        "• Использовать текстовую команду"
+                    )
+                    return
+                
+                # 10. Увеличиваем счетчик
+                db_user.voice_queries_today += 1
+                db.commit()
+                
+                # 11. Определяем команду
+                # Проверяем контекст (последняя команда пользователя)
+                last_command = context.user_data.get('last_command')
+                last_command_time = context.user_data.get('last_command_time')
+                
+                # Сбрасываем last_command если прошло больше 5 минут (300 секунд)
+                if last_command_time and (datetime.now(timezone.utc) - last_command_time).total_seconds() > 300:
+                    logger.info("⏰ Сброс last_command (прошло >5 минут)")
+                    last_command = None
+                    context.user_data.pop('last_command', None)
+                    context.user_data.pop('last_command_time', None)
+                
+                if last_command in ['/ask', '/search']:
+                    # Автоматически выполняем последнюю команду
+                    await status_message.edit_text(
+                        f"✅ Распознано: \"{transcription[:100]}...\"\n\n"
+                        f"🔍 Выполняю команду {last_command}..."
+                    )
+                    
+                    # Выполняем команду
+                    if last_command == '/ask':
+                        await self._execute_ask_with_text(update, context, transcription, db_user)
+                    else:  # /search
+                        await self._execute_search_with_text(update, context, transcription, db_user)
+                
+                else:
+                    # AI-классификация через n8n
+                    await status_message.edit_text(
+                        f"✅ Распознано: \"{transcription[:100]}...\"\n\n"
+                        f"🤖 Определяю подходящую команду..."
+                    )
+                    
+                    classification = await self._classify_voice_command(transcription, db_user.id)
+                    
+                    if classification and classification.get('command'):
+                        command = classification['command']
+                        confidence = classification.get('confidence', 0)
+                        reasoning = classification.get('reasoning', '')
+                        
+                        logger.info(
+                            f"🤖 AI классификация: {command} "
+                            f"(confidence: {confidence:.0%}, reason: {reasoning})"
+                        )
+                        
+                        # Выполняем определенную команду
+                        await status_message.edit_text(
+                            f"✅ Распознано: \"{transcription[:100]}...\"\n\n"
+                            f"🤖 AI выбрал: /{command} ({confidence:.0%} уверенности)\n"
+                            f"🔍 Выполняю..."
+                        )
+                        
+                        if command == 'ask':
+                            await self._execute_ask_with_text(update, context, transcription, db_user)
+                        elif command == 'search':
+                            await self._execute_search_with_text(update, context, transcription, db_user)
+                        else:
+                            # Fallback для неизвестных команд
+                            await self._execute_ask_with_text(update, context, transcription, db_user)
+                    
+                    else:
+                        # Fallback: показываем кнопки если AI не сработал
+                        logger.warning("⚠️ AI классификация недоступна, показываем кнопки")
+                        keyboard = [
+                            [InlineKeyboardButton("💡 /ask - RAG поиск", callback_data=f"voice_ask:{transcription[:200]}")],
+                            [InlineKeyboardButton("🔍 /search - Гибридный поиск", callback_data=f"voice_search:{transcription[:200]}")]
+                        ]
+                        reply_markup = InlineKeyboardMarkup(keyboard)
+                        
+                        await status_message.edit_text(
+                            f"✅ **Распознано:**\n\n"
+                            f"\"{transcription}\"\n\n"
+                            f"🤔 Выберите команду для выполнения:",
+                            parse_mode='Markdown',
+                            reply_markup=reply_markup
+                        )
+                        
+                        # Сохраняем транскрипцию в контексте
+                        context.user_data['voice_transcription'] = transcription
+            
+            except ValueError as e:
+                # Ошибка длительности
+                await status_message.edit_text(f"❌ {str(e)}")
+            except TimeoutError:
+                await status_message.edit_text(
+                    "⏰ Timeout транскрибации\n\n"
+                    "💡 Попробуйте записать более короткое сообщение"
+                )
+            except Exception as e:
+                logger.error(f"❌ Ошибка обработки голосового: {e}")
+                await status_message.edit_text(
+                    f"❌ Ошибка обработки голосового сообщения\n\n"
+                    f"💡 Попробуйте еще раз или используйте текстовую команду"
+                )
+        
+        finally:
+            db.close()
+    
+    async def _classify_voice_command(self, transcription: str, user_id: int) -> Optional[Dict]:
+        """
+        Классифицировать голосовую команду через n8n AI агента
+        
+        Args:
+            transcription: Транскрипция голосового сообщения
+            user_id: ID пользователя
+            
+        Returns:
+            Dict с полями: command, confidence, reasoning
+            или None если классификация не удалась
+        """
+        n8n_url = os.getenv("N8N_WEBHOOK_URL", "http://n8n:5678")
+        n8n_enabled = os.getenv("VOICE_AI_CLASSIFIER_ENABLED", "true").lower() == "true"
+        
+        if not n8n_enabled:
+            logger.info("🤖 AI классификатор отключен в конфигурации")
+            return None
+        
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.post(
+                    f"{n8n_url}/webhook/voice-classify",
+                    json={
+                        "transcription": transcription,
+                        "user_id": user_id
+                    }
+                )
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    
+                    # Проверяем что result содержит command
+                    if result and result.get('command'):
+                        logger.info(
+                            f"🤖 AI classification: {result.get('command')} "
+                            f"({result.get('confidence', 0):.0%})"
+                        )
+                        return result
+                    else:
+                        logger.error(f"❌ n8n classifier returned invalid response: {result}")
+                        return None
+                else:
+                    logger.error(f"❌ n8n classifier error {response.status_code}: {response.text}")
+                    return None
+        
+        except httpx.TimeoutException:
+            logger.error("⏰ n8n classifier timeout")
+            return None
+        except Exception as e:
+            logger.error(f"❌ Error calling n8n classifier: {e}")
+            return None
+    
+    async def _execute_ask_with_text(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+        query_text: str,
+        db_user: User
+    ):
+        """Выполнить /ask с текстом запроса"""
+        try:
+            # Отправляем запрос к RAG service
+            await update.message.reply_text("🔍 Ищу ответ в ваших постах...")
+            
+            result = await self._call_rag_service(
+                "/rag/ask",
+                method="POST",
+                user_id=db_user.id,
+                query=query_text,
+                top_k=5
+            )
+            
+            if not result:
+                await update.message.reply_text(
+                    "❌ RAG-сервис недоступен\n\n"
+                    "💡 Попробуйте позже"
+                )
+                return
+            
+            answer = result.get("answer", "Не удалось найти ответ")
+            
+            # Форматируем ответ (источники уже включены в answer от RAG service)
+            # НЕ используем parse_mode, так как RAG может вернуть спецсимволы Markdown
+            response_text = f"💡 Ответ:\n\n{answer}"
+            
+            await update.message.reply_text(response_text)
+        
+        except Exception as e:
+            logger.error(f"❌ Ошибка _execute_ask_with_text: {e}")
+            await update.message.reply_text("❌ Ошибка выполнения команды")
+    
+    async def _execute_search_with_text(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+        query_text: str,
+        db_user: User
+    ):
+        """Выполнить /search с текстом запроса"""
+        try:
+            await update.message.reply_text("🔍 Ищу в ваших постах и в интернете...")
+            
+            # Гибридный поиск (посты + веб через SearXNG)
+            hybrid_result = await self._call_rag_service(
+                "/rag/hybrid_search",
+                method="POST",
+                user_id=db_user.id,
+                query=query_text,
+                include_posts=True,
+                include_web=True,
+                limit=5
+            )
+            
+            response_text = f"🔍 Результаты поиска: \"{query_text}\"\n\n"
+            
+            # Посты пользователя
+            if hybrid_result and hybrid_result.get("posts"):
+                posts = hybrid_result["posts"]
+                response_text += f"📱 Ваши посты ({len(posts)}):\n"
+                for i, post in enumerate(posts[:5], 1):
+                    channel = post.get("channel", "Unknown")
+                    score = int(post.get("score", 0) * 100)
+                    snippet = post.get("snippet", post.get("text", ""))[:80]
+                    response_text += f"{i}. @{channel} ({score}%)\n   {snippet}...\n\n"
+            else:
+                response_text += "📱 Ваши посты: Ничего не найдено\n\n"
+            
+            # Интернет (реальные результаты из SearXNG)
+            if hybrid_result and hybrid_result.get("web"):
+                web_results = hybrid_result["web"]
+                response_text += f"🌐 Интернет ({len(web_results)}):\n"
+                for i, web in enumerate(web_results[:3], 1):
+                    title = web.get("title", "Без названия")[:70]
+                    url = web.get("url", "#")
+                    response_text += f"{i}. {title}\n   {url}\n\n"
+            else:
+                response_text += "🌐 Интернет: Ничего не найдено"
+            
+            await update.message.reply_text(response_text)
+        
+        except Exception as e:
+            logger.error(f"❌ Ошибка _execute_search_with_text: {e}")
+            await update.message.reply_text("❌ Ошибка выполнения команды")
+    
+    async def handle_voice_ask_callback(self, query, context: ContextTypes.DEFAULT_TYPE):
+        """Обработка кнопки voice_ask - выполнить /ask с транскрипцией"""
+        user = query.from_user
+        transcription = query.data.split(":", 1)[1] if ":" in query.data else context.user_data.get('voice_transcription', '')
+        
+        db = SessionLocal()
+        
+        try:
+            db_user = db.query(User).filter(User.telegram_id == user.id).first()
+            
+            if not db_user:
+                await query.edit_message_text("❌ Пользователь не найден")
+                return
+            
+            # Обновляем сообщение
+            await query.edit_message_text(
+                f"✅ Распознано: \"{transcription[:100]}...\"\n\n"
+                f"🔍 Выполняю /ask..."
+            )
+            
+            # Выполняем /ask
+            # Создаем фиктивный update для вызова команды
+            class FakeMessage:
+                def __init__(self, chat_id):
+                    self.chat_id = chat_id
+                    self.message_id = query.message.message_id
+                
+                async def reply_text(self, text, **kwargs):
+                    await query.message.reply_text(text, **kwargs)
+            
+            class FakeUpdate:
+                def __init__(self, user, message):
+                    self.effective_user = user
+                    self.message = message
+            
+            fake_update = FakeUpdate(query.from_user, FakeMessage(query.message.chat_id))
+            
+            await self._execute_ask_with_text(fake_update, context, transcription, db_user)
+        
+        except Exception as e:
+            logger.error(f"❌ Ошибка handle_voice_ask_callback: {e}")
+            await query.edit_message_text(f"❌ Ошибка: {str(e)}")
+        finally:
+            db.close()
+    
+    async def handle_voice_search_callback(self, query, context: ContextTypes.DEFAULT_TYPE):
+        """Обработка кнопки voice_search - выполнить /search с транскрипцией"""
+        user = query.from_user
+        transcription = query.data.split(":", 1)[1] if ":" in query.data else context.user_data.get('voice_transcription', '')
+        
+        db = SessionLocal()
+        
+        try:
+            db_user = db.query(User).filter(User.telegram_id == user.id).first()
+            
+            if not db_user:
+                await query.edit_message_text("❌ Пользователь не найден")
+                return
+            
+            # Обновляем сообщение
+            await query.edit_message_text(
+                f"✅ Распознано: \"{transcription[:100]}...\"\n\n"
+                f"🔍 Выполняю /search..."
+            )
+            
+            # Выполняем /search
+            class FakeMessage:
+                def __init__(self, chat_id):
+                    self.chat_id = chat_id
+                    self.message_id = query.message.message_id
+                
+                async def reply_text(self, text, **kwargs):
+                    await query.message.reply_text(text, **kwargs)
+            
+            class FakeUpdate:
+                def __init__(self, user, message):
+                    self.effective_user = user
+                    self.message = message
+            
+            fake_update = FakeUpdate(query.from_user, FakeMessage(query.message.chat_id))
+            
+            await self._execute_search_with_text(fake_update, context, transcription, db_user)
+        
+        except Exception as e:
+            logger.error(f"❌ Ошибка handle_voice_search_callback: {e}")
+            await query.edit_message_text(f"❌ Ошибка: {str(e)}")
         finally:
             db.close()
     
@@ -2249,8 +2777,36 @@ class TelegramBot:
                 reply_markup=reply_markup
             )
     
+    def get_voice_mode_keyboard(self) -> ReplyKeyboardMarkup:
+        """Создать Reply клавиатуру для выбора режима голосовых команд"""
+        keyboard = [
+            [
+                KeyboardButton("🤖 AI режим"),
+                KeyboardButton("💡 Ask режим"),
+                KeyboardButton("🔍 Search режим")
+            ]
+        ]
+        return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
+    
+    async def reset_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Сбросить состояние голосовых команд"""
+        context.user_data.pop('last_command', None)
+        context.user_data.pop('last_command_time', None)
+        context.user_data.pop('voice_transcription', None)
+        context.user_data['voice_mode'] = 'ai'  # Сбрасываем в AI режим
+        
+        await update.message.reply_text(
+            "🔄 **Состояние сброшено!**\n\n"
+            "Режим: 🤖 AI классификатор\n\n"
+            "Голосовые сообщения будут автоматически распознаваться как /ask или /search",
+            reply_markup=self.get_voice_mode_keyboard()
+        )
+    
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Справка по командам с учетом роли пользователя"""
+        # Сбрасываем last_command чтобы голосовые использовали AI классификатор
+        context.user_data.pop('last_command', None)
+        
         user = update.effective_user
         db = SessionLocal()
         
@@ -2291,6 +2847,22 @@ class TelegramBot:
 /search <запрос> - Гибридный поиск (посты + веб)
 /recommend - Персональные рекомендации
 /digest - Настроить AI-дайджесты
+
+🎤 **Голосовые команды (Premium/Enterprise):**
+📌 **Вариант 1:** Команда → Голосовое
+• Отправьте `/ask` или `/search`
+• Затем отправьте голосовое с запросом
+• Автоматически выполнится выбранная команда
+
+📌 **Вариант 2:** Голосовое → AI выбирает
+• Отправьте голосовое БЕЗ команды
+• AI автоматически выберет /ask или /search
+
+🔄 **Сброс режима:**
+• `/reset` - сбросить состояние (вернуться к AI)
+• Авто-сброс через 5 минут после команды
+
+⚠️ Ограничения: макс. 60 сек, лимиты по подписке
 
 💎 **Подписка:**
 /subscription - Информация о вашей подписке

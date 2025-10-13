@@ -26,7 +26,7 @@ class TaggingService:
         
         # OpenRouter настройки
         self.openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
-        self.openrouter_model = os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-chat-v3.1:free")
+        self.openrouter_model = os.getenv("OPENROUTER_MODEL", "qwen/qwen-2.5-72b-instruct:free")
         self.openrouter_url = "https://openrouter.ai/api/v1/chat/completions"
         
         # GigaChat настройки (через gpt2giga-proxy)
@@ -52,10 +52,10 @@ class TaggingService:
         
         # Fallback модели (только для OpenRouter)
         self.fallback_models = [
-            "deepseek/deepseek-chat-v3.1:free",
+            "qwen/qwen-2.5-72b-instruct:free",
             "meta-llama/llama-4-maverick:free",
             "z-ai/glm-4.5-air:free",
-            "qwen/qwen-2.5-72b-instruct:free"
+            "deepseek/deepseek-chat-v3.1:free"
         ]
         
         # Retry настройки

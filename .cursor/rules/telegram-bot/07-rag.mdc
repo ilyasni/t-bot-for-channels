@@ -2,63 +2,99 @@
 title: "RAG System"
 description: "Векторный поиск, AI-генерация, дайджесты, Qdrant"
 tags: ["rag", "vector-search", "ai", "qdrant", "embeddings"]
-version: "3.1"
+version: "3.3"
+ruleType: "autoAttached"
+priority: medium
+scope:
+  - "telethon/rag_service/**"
+  - "telethon/*rag*.py"
 ---
 
 # RAG System
+
+> **Rule Type:** Auto-Attached  
+> **Lines:** < 500 (optimized)  
+> **Priority:** Medium
 
 ## 🎯 High-Level Overview
 
 **RAG Service** — микросервис для векторного поиска и AI-генерации ответов.
 
-**Stack:**
+**Essential Stack:**
 - Qdrant (векторная БД)
-- GigaChat (embeddings)
-- Redis (cache)
+- GigaChat (embeddings: EmbeddingsGigaR, 1536 dim)
+- Redis (cache embeddings, 24h TTL)
 - OpenRouter (LLM generation)
 
+**Pipeline:**
 ```
-User Query → Embedding → Qdrant Search → Top K Results
-                                              ↓
-                                    Context + Query → LLM → Answer
-```
-
-## 🏗️ RAG Architecture
-
-### Pipeline
-
-```python
-# 1. Индексирование (автоматическое)
 Post → Embedding (GigaChat) → Qdrant Vector → Indexed
-     ↓ (кеш)
+     ↓ (cache)
    Redis (24h TTL)
 
-# 2. Поиск и генерация
 User Query → Embedding → Qdrant Search → Top K Results
                                               ↓
                                     Context + Query → LLM → Answer
 ```
 
-### Микросервис
+## 🚀 Critical Patterns
 
-```yaml
-# docker-compose.override.yml
-rag-service:
-  build: ./telethon/rag_service
-  ports:
-    - "8020:8020"
-  environment:
-    - QDRANT_URL=http://qdrant:6333
-    - REDIS_HOST=redis
-    - GIGACHAT_PROXY_URL=http://gpt2giga-proxy:8090
-```
-
-## 📦 Components
-
-### 1. Vector DB (Qdrant)
+### 1. User Isolation in Qdrant
 
 ```python
-# rag_service/vector_db.py
+# ✅ Correct - separate collection per user
+collection_name = f"user_{user_id}_posts"
+
+# ❌ Bad - shared collection
+collection_name = "posts"  # NO! Data leak!
+```
+
+### 2. Embedding Cache
+
+```python
+# ✅ Correct - cache in Redis
+import hashlib
+
+text_hash = hashlib.md5(text.encode()).hexdigest()
+cache_key = f"embedding:{text_hash}"
+
+cached = redis_client.get(cache_key)
+if cached:
+    return json.loads(cached)
+
+# Generate & cache
+embedding = await generate_gigachat_embedding(text)
+redis_client.setex(cache_key, 86400, json.dumps(embedding))  # 24h
+
+# ❌ Bad - no cache
+embedding = await generate_gigachat_embedding(text)  # Slow & expensive!
+```
+
+### 3. Score Threshold
+
+```python
+# ✅ Correct - filter low-relevance results
+results = qdrant_client.search(
+    collection_name=f"user_{user_id}_posts",
+    query_vector=query_embedding,
+    limit=10,
+    score_threshold=0.7  # Only relevant results
+)
+
+# ❌ Bad - returns irrelevant
+results = qdrant_client.search(
+    collection_name=collection_name,
+    query_vector=query_embedding,
+    limit=10
+    # No threshold!
+)
+```
+
+## 📦 Core Components
+
+### VectorDB Service
+
+```python
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, Filter, FieldCondition
 
@@ -66,25 +102,21 @@ class VectorDB:
     def __init__(self):
         self.client = QdrantClient(
             url=os.getenv("QDRANT_URL", "http://qdrant:6333"),
-            api_key=os.getenv("QDRANT_API_KEY")
+            api_key=os.getenv("QDRANT_API_KEY"),
+            timeout=30
         )
     
     async def create_collection(self, user_id: int):
-        """
-        Создать коллекцию для пользователя
-        """
+        """Create user-specific collection"""
         collection_name = f"user_{user_id}_posts"
         
-        # Проверка существования
-        collections = self.client.get_collections().collections
-        if collection_name in [c.name for c in collections]:
+        if self._collection_exists(collection_name):
             return
         
-        # Создание коллекции
         self.client.create_collection(
             collection_name=collection_name,
             vectors_config=VectorParams(
-                size=1536,  # GigaChat embeddings dimension
+                size=1536,  # GigaChat embeddings
                 distance=Distance.COSINE
             )
         )
@@ -96,28 +128,21 @@ class VectorDB:
         embedding: List[float],
         metadata: dict
     ):
-        """
-        Добавить/обновить пост
-        """
-        collection_name = f"user_{user_id}_posts"
-        
-        # Metadata для фильтрации
-        payload = {
-            "post_id": post_id,
-            "channel_id": metadata.get("channel_id"),
-            "channel_username": metadata.get("channel_username"),
-            "tags": metadata.get("tags", []),
-            "posted_at": metadata.get("posted_at"),
-            "url": metadata.get("url"),
-            "text": metadata.get("text")[:500]  # Первые 500 символов
-        }
-        
+        """Upsert post with metadata"""
         self.client.upsert(
-            collection_name=collection_name,
+            collection_name=f"user_{user_id}_posts",
             points=[{
                 "id": post_id,
                 "vector": embedding,
-                "payload": payload
+                "payload": {
+                    "post_id": post_id,
+                    "channel_id": metadata["channel_id"],
+                    "channel_username": metadata["channel_username"],
+                    "tags": metadata.get("tags", []),
+                    "posted_at": metadata["posted_at"],
+                    "url": metadata["url"],
+                    "text": metadata["text"][:500]
+                }
             }]
         )
     
@@ -129,16 +154,11 @@ class VectorDB:
         top_k: int = 10,
         score_threshold: float = 0.7
     ) -> List[dict]:
-        """
-        Векторный поиск
-        """
-        collection_name = f"user_{user_id}_posts"
-        
-        # Фильтры
+        """Vector search with filters"""
+        # Build filters
         query_filter = None
         if filters:
             conditions = []
-            
             if "channel_id" in filters:
                 conditions.append(
                     FieldCondition(
@@ -146,7 +166,6 @@ class VectorDB:
                         match={"value": filters["channel_id"]}
                     )
                 )
-            
             if "tags" in filters:
                 conditions.append(
                     FieldCondition(
@@ -154,37 +173,27 @@ class VectorDB:
                         match={"any": filters["tags"]}
                     )
                 )
-            
             if conditions:
                 query_filter = Filter(must=conditions)
         
-        # Поиск
+        # Search
         results = self.client.search(
-            collection_name=collection_name,
+            collection_name=f"user_{user_id}_posts",
             query_vector=query_vector,
             query_filter=query_filter,
             limit=top_k,
             score_threshold=score_threshold
         )
         
-        return [
-            {
-                "post_id": r.id,
-                "score": r.score,
-                **r.payload
-            }
-            for r in results
-        ]
+        return [{"post_id": r.id, "score": r.score, **r.payload} for r in results]
 ```
 
-### 2. Embeddings Service
+### Embeddings Service
 
 ```python
-# rag_service/embeddings.py
 import httpx
 import hashlib
 import json
-from typing import List
 
 class EmbeddingsService:
     def __init__(self):
@@ -192,8 +201,6 @@ class EmbeddingsService:
             "GIGACHAT_PROXY_URL",
             "http://gpt2giga-proxy:8090"
         )
-        
-        # Redis cache
         self.redis_client = redis.Redis(
             host=os.getenv("REDIS_HOST", "redis"),
             port=6379,
@@ -202,9 +209,7 @@ class EmbeddingsService:
         self.cache_ttl = 86400  # 24 hours
     
     async def generate(self, text: str) -> List[float]:
-        """
-        Генерация embedding с кешированием
-        """
+        """Generate embedding with cache"""
         # Cache key
         text_hash = hashlib.md5(text.encode()).hexdigest()
         cache_key = f"embedding:{text_hash}"
@@ -214,7 +219,7 @@ class EmbeddingsService:
         if cached:
             return json.loads(cached)
         
-        # Generate через GigaChat
+        # Generate via GigaChat
         embedding = await self._generate_gigachat(text)
         
         # Save to cache
@@ -227,31 +232,22 @@ class EmbeddingsService:
         return embedding
     
     async def _generate_gigachat(self, text: str) -> List[float]:
-        """
-        GigaChat embeddings (EmbeddingsGigaR)
-        """
-        async with httpx.AsyncClient() as client:
+        """GigaChat embeddings (EmbeddingsGigaR)"""
+        async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
                 f"{self.gigachat_url}/v1/embeddings",
                 json={
                     "model": "EmbeddingsGigaR",
                     "input": text
-                },
-                timeout=30.0
+                }
             )
-            
             response.raise_for_status()
-            data = response.json()
-            
-            return data["data"][0]["embedding"]
+            return response.json()["data"][0]["embedding"]
 ```
 
-### 3. RAG Generator
+### RAG Generator
 
 ```python
-# rag_service/generator.py
-from typing import List, Dict, Any
-
 class RAGGenerator:
     def __init__(self):
         self.openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
@@ -264,13 +260,14 @@ class RAGGenerator:
         max_tokens: int = 500,
         temperature: float = 0.3
     ) -> Dict[str, Any]:
-        """
-        RAG-генерация ответа
-        """
-        # 1. Формируем контекст
-        context_text = self._format_context(context_posts)
+        """RAG answer generation"""
+        # Format context
+        context_text = "\n---\n".join([
+            f"[Источник {i}: @{p['channel_username']}, score: {p['score']:.2f}]\n{p['text']}"
+            for i, p in enumerate(context_posts, 1)
+        ])
         
-        # 2. Prompt для LLM
+        # Prompt
         prompt = f"""На основе следующего контекста ответь на вопрос пользователя.
 
 Контекст из Telegram каналов:
@@ -286,14 +283,9 @@ class RAGGenerator:
 
 Ответ:"""
         
-        # 3. Генерация через OpenRouter
-        answer = await self._generate_openrouter(
-            prompt,
-            max_tokens=max_tokens,
-            temperature=temperature
-        )
+        # Generate
+        answer = await self._generate_openrouter(prompt, max_tokens, temperature)
         
-        # 4. Prepare response
         return {
             "answer": answer,
             "sources": [
@@ -308,31 +300,14 @@ class RAGGenerator:
             "context_size": len(context_posts)
         }
     
-    def _format_context(self, posts: List[dict]) -> str:
-        """
-        Форматирование контекста
-        """
-        formatted = []
-        
-        for i, post in enumerate(posts, 1):
-            formatted.append(
-                f"[Источник {i}: @{post['channel_username']}, "
-                f"релевантность: {post['score']:.2f}]\n"
-                f"{post['text']}\n"
-            )
-        
-        return "\n---\n".join(formatted)
-    
     async def _generate_openrouter(
         self,
         prompt: str,
         max_tokens: int,
         temperature: float
     ) -> str:
-        """
-        OpenRouter API call
-        """
-        async with httpx.AsyncClient() as client:
+        """OpenRouter API call"""
+        async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
                 "https://openrouter.ai/api/v1/chat/completions",
                 headers={
@@ -341,37 +316,26 @@ class RAGGenerator:
                 },
                 json={
                     "model": self.model,
-                    "messages": [
-                        {"role": "user", "content": prompt}
-                    ],
+                    "messages": [{"role": "user", "content": prompt}],
                     "max_tokens": max_tokens,
                     "temperature": temperature
-                },
-                timeout=60.0
+                }
             )
-            
             response.raise_for_status()
-            data = response.json()
-            
-            return data["choices"][0]["message"]["content"]
+            return response.json()["choices"][0]["message"]["content"]
 ```
 
-### 4. Indexer Service
+### Indexer Service
 
 ```python
-# rag_service/indexer.py
-from typing import Optional
-
 class IndexerService:
     def __init__(self):
         self.vector_db = VectorDB()
         self.embeddings_service = EmbeddingsService()
     
     async def index_post(self, post_id: int, user_id: int) -> bool:
-        """
-        Индексировать пост
-        """
-        # 1. Получаем пост из БД
+        """Index single post"""
+        # Get post
         db = SessionLocal()
         post = db.query(Post).filter(Post.id == post_id).first()
         
@@ -379,14 +343,14 @@ class IndexerService:
             db.close()
             return False
         
-        # 2. Генерируем embedding
+        # Generate embedding
         text = post.text
         if post.enriched_content:
             text = f"{post.text}\n\n{post.enriched_content}"
         
         embedding = await self.embeddings_service.generate(text)
         
-        # 3. Metadata
+        # Metadata
         metadata = {
             "channel_id": post.channel_id,
             "channel_username": post.channel.channel_username,
@@ -396,7 +360,7 @@ class IndexerService:
             "text": text
         }
         
-        # 4. Upsert в Qdrant
+        # Upsert to Qdrant
         await self.vector_db.upsert_post(
             user_id=user_id,
             post_id=post.id,
@@ -404,36 +368,25 @@ class IndexerService:
             metadata=metadata
         )
         
-        # 5. Сохраняем статус в БД
-        status = IndexingStatus(
+        # Save status
+        db.add(IndexingStatus(
             user_id=user_id,
             post_id=post.id,
             vector_id=f"user_{user_id}_posts:{post.id}",
             status="success"
-        )
-        db.add(status)
+        ))
         db.commit()
         db.close()
         
         return True
     
-    async def batch_index(
-        self,
-        user_id: int,
-        post_ids: List[int]
-    ) -> Dict[str, int]:
-        """
-        Batch индексация (до 100 постов)
-        """
+    async def batch_index(self, user_id: int, post_ids: List[int]) -> Dict[str, int]:
+        """Batch indexing (max 100 posts)"""
         success = 0
         failed = 0
         
         for batch in chunks(post_ids, 100):
-            tasks = [
-                self.index_post(post_id, user_id)
-                for post_id in batch
-            ]
-            
+            tasks = [self.index_post(post_id, user_id) for post_id in batch]
             results = await asyncio.gather(*tasks, return_exceptions=True)
             
             for result in results:
@@ -447,7 +400,7 @@ class IndexerService:
         return {"success": success, "failed": failed}
 ```
 
-## 🚀 RAG API Endpoints
+## 🌐 RAG API Endpoints
 
 ```python
 # rag_service/main.py
@@ -462,13 +415,11 @@ async def rag_query(
     top_k: int = 10,
     min_score: float = 0.7
 ):
-    """
-    RAG-запрос
-    """
-    # 1. Embedding запроса
+    """RAG query endpoint"""
+    # Embedding
     query_embedding = await embeddings_service.generate(query)
     
-    # 2. Векторный поиск
+    # Search
     results = await vector_db.search(
         user_id=user_id,
         query_vector=query_embedding,
@@ -482,12 +433,8 @@ async def rag_query(
             "sources": []
         }
     
-    # 3. Генерация ответа
-    response = await rag_generator.generate_answer(
-        query=query,
-        context_posts=results
-    )
-    
+    # Generate answer
+    response = await rag_generator.generate_answer(query=query, context_posts=results)
     return response
 
 @app.post("/rag/index/post/{post_id}")
@@ -496,15 +443,8 @@ async def index_post_endpoint(
     user_id: int,
     background_tasks: BackgroundTasks
 ):
-    """
-    Индексировать пост (background)
-    """
-    background_tasks.add_task(
-        indexer_service.index_post,
-        post_id,
-        user_id
-    )
-    
+    """Index post (background)"""
+    background_tasks.add_task(indexer_service.index_post, post_id, user_id)
     return {"status": "queued", "post_id": post_id}
 
 @app.post("/rag/index/batch")
@@ -513,78 +453,91 @@ async def batch_index_endpoint(
     post_ids: List[int],
     background_tasks: BackgroundTasks
 ):
-    """
-    Batch индексация
-    """
-    background_tasks.add_task(
-        indexer_service.batch_index,
-        user_id,
-        post_ids
-    )
-    
+    """Batch indexing"""
+    background_tasks.add_task(indexer_service.batch_index, user_id, post_ids)
     return {"status": "queued", "count": len(post_ids)}
 ```
 
-## ✅ Verification Steps
+## ✅ Verification Checklist
 
-1. **Qdrant доступен:**
-```bash
-curl http://localhost:6333/collections
-# {"result": {"collections": [...]}}
-```
+- [ ] Qdrant collections isolated by user (`user_{id}_posts`)
+- [ ] Embeddings cached in Redis (24h TTL)
+- [ ] Score threshold >= 0.7 for relevance
+- [ ] Batch operations limited to 100 items
+- [ ] Indexing status saved to PostgreSQL
+- [ ] Background tasks for indexing
+- [ ] Error handling with try-except
+- [ ] Timeouts set (30s for embeddings, 60s for LLM)
 
-2. **Коллекция создана:**
+## ❌ Deprecated Patterns
+
+**NEVER do this:**
+
 ```python
-collections = qdrant_client.get_collections()
-user_collections = [c.name for c in collections if "user_" in c.name]
-assert len(user_collections) > 0
+# ❌ Shared collection
+collection_name = "posts"  # NO! Data leak!
+
+# ❌ No cache
+embedding = await generate_embedding(text)  # Expensive!
+
+# ❌ No score threshold
+results = qdrant_client.search(query_vector=qv, limit=10)  # Irrelevant results!
+
+# ❌ Blocking
+time.sleep(5)  # Blocks event loop!
+
+# ❌ No batch limit
+for post_id in all_post_ids:  # Could be 10,000!
+    await index_post(post_id)
 ```
 
-3. **Embeddings кешируются:**
-```bash
-docker exec redis redis-cli KEYS "embedding:*"
-# Должен показать закешированные embeddings
-```
+## 🎯 Quick Examples
 
-4. **Индексация работает:**
+### ✅ Correct
+
 ```python
-result = await indexer_service.index_post(post_id=1, user_id=1)
-assert result == True
+# User isolation
+collection = f"user_{user_id}_posts"
+
+# Cache embeddings
+cache_key = f"embedding:{hash}"
+cached = redis_client.get(cache_key)
+if cached:
+    return json.loads(cached)
+
+# Score threshold
+results = qdrant_client.search(score_threshold=0.7)
+
+# Background indexing
+background_tasks.add_task(index_post, post_id)
+
+# Batch with limit
+for batch in chunks(post_ids, 100):
+    await process_batch(batch)
 ```
 
-5. **RAG query работает:**
-```bash
-curl -X POST http://localhost:8020/rag/query \
-  -H "Content-Type: application/json" \
-  -d '{"user_id": 1, "query": "AI новости"}'
-# {"answer": "...", "sources": [...]}
+### ❌ Bad
+
+```python
+# Shared collection
+collection = "posts"
+
+# No cache
+embedding = await generate(text)
+
+# No threshold
+results = qdrant_client.search()
+
+# Blocking
+await index_post(post_id)  # Blocks!
+
+# No limit
+for post_id in all_posts:  # Could be 10,000!
+    process(post_id)
 ```
 
-## 🚨 Troubleshooting
+## 📚 Related Rules
 
-### RAG не находит посты
-
-```bash
-# 1. Проверьте индексацию
-curl http://localhost:8020/rag/index/status/1
-
-# 2. Проверьте Qdrant collection
-curl http://localhost:6333/collections/user_1_posts
-
-# 3. Проверьте embeddings cache
-docker exec redis redis-cli KEYS "embedding:*"
-```
-
-### GigaChat embeddings не работают
-
-```bash
-# Проверьте gpt2giga-proxy
-curl http://localhost:8090/v1/models
-# Должен вернуть список моделей
-```
-
-## 📚 Связанные правила
-
-- `01-core.mdc` — Основные правила
-- `03-database.mdc` — Redis cache
-- `09-external.mdc` — Qdrant, GigaChat
+- `01-core.mdc` — User filtering, async patterns
+- `03-database.mdc` — IndexingStatus model, Redis cache
+- `09-external.mdc` — Qdrant, GigaChat integration

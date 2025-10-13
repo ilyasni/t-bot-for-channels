@@ -9,6 +9,8 @@ SUBSCRIPTION_TIERS = {
         "max_groups": 2,  # Новое: лимит групп
         "max_posts_per_day": 100,
         "rag_queries_per_day": 10,
+        "voice_transcription_enabled": False,  # Новое: голосовые команды
+        "voice_queries_per_day": 0,  # Новое: лимит голосовых запросов
         "ai_digest": False,
         "priority_parsing": False,
         "mentions_enabled": True,  # Уведомления об упоминаниях
@@ -22,6 +24,8 @@ SUBSCRIPTION_TIERS = {
         "max_groups": 5,  # Новое: лимит групп
         "max_posts_per_day": 500,
         "rag_queries_per_day": 50,
+        "voice_transcription_enabled": True,  # Новое: голосовые команды
+        "voice_queries_per_day": 20,  # Новое: лимит голосовых запросов
         "ai_digest": True,
         "priority_parsing": True,
         "mentions_enabled": True,
@@ -36,6 +40,8 @@ SUBSCRIPTION_TIERS = {
         "max_groups": 5,  # Новое: лимит групп
         "max_posts_per_day": 500,
         "rag_queries_per_day": 50,
+        "voice_transcription_enabled": False,  # Новое: голосовые команды
+        "voice_queries_per_day": 0,  # Новое: лимит голосовых запросов
         "ai_digest": True,
         "priority_parsing": False,
         "mentions_enabled": True,
@@ -50,6 +56,8 @@ SUBSCRIPTION_TIERS = {
         "max_groups": 20,  # Новое: лимит групп
         "max_posts_per_day": 2000,
         "rag_queries_per_day": 200,
+        "voice_transcription_enabled": True,  # Новое: голосовые команды
+        "voice_queries_per_day": 50,  # Новое: лимит голосовых запросов
         "ai_digest": True,
         "priority_parsing": True,
         "mentions_enabled": True,
@@ -64,6 +72,8 @@ SUBSCRIPTION_TIERS = {
         "max_groups": 100,  # Новое: лимит групп
         "max_posts_per_day": 99999,
         "rag_queries_per_day": 999,
+        "voice_transcription_enabled": True,  # Новое: голосовые команды
+        "voice_queries_per_day": 999,  # Новое: лимит голосовых запросов
         "ai_digest": True,
         "priority_parsing": True,
         "mentions_enabled": True,
@@ -91,6 +101,9 @@ def format_subscription_info(subscription_type: str) -> str:
     text += f"• Групп: {tier.get('max_groups', 0)}\n"
     text += f"• Постов в день: {tier['max_posts_per_day']}\n"
     text += f"• RAG запросов в день: {tier['rag_queries_per_day']}\n"
+    text += f"• 🎤 Голосовые команды: {'✅' if tier.get('voice_transcription_enabled', False) else '❌'}\n"
+    if tier.get('voice_transcription_enabled', False):
+        text += f"• Голосовых запросов в день: {tier.get('voice_queries_per_day', 0)}\n"
     text += f"• AI-дайджесты: {'✅' if tier['ai_digest'] else '❌'}\n"
     text += f"• Уведомления об упоминаниях: {'✅' if tier.get('mentions_enabled', False) else '❌'}\n"
     text += f"• Приоритетный парсинг: {'✅' if tier['priority_parsing'] else '❌'}\n"

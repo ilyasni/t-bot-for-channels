@@ -2,89 +2,89 @@
 title: "External Services Integration"
 description: "Интеграция с Qdrant, Searxng, Crawl4AI, Ollama, n8n"
 tags: ["external", "integration", "qdrant", "crawl4ai", "ollama"]
-version: "3.1"
+version: "3.3"
+ruleType: "autoAttached"
+priority: low
+scope:
+  - "telethon/integrations/**"
+  - "telethon/*_client.py"
 ---
 
 # External Services Integration
+
+> **Rule Type:** Auto-Attached  
+> **Lines:** < 500 (optimized)  
+> **Priority:** Low
 
 ## 🎯 High-Level Overview
 
 Интеграция с внешними сервисами для расширения функциональности:
 
-- **Qdrant** — векторная БД
-- **Redis/Valkey** — кеш + sessions
-- **Searxng** — метапоисковик
-- **Crawl4AI** — веб-скрапинг
-- **Ollama** — локальные LLM
-- **n8n/Flowise** — автоматизация
+- **Qdrant** — векторная БД (internal: `http://qdrant:6333`)
+- **Redis/Valkey** — кеш + sessions (internal: `redis:6379`, **БЕЗ пароля**)
+- **Searxng** — метапоисковик (external: `https://searxng.produman.studio`)
+- **Crawl4AI** — веб-скрапинг (internal: `http://crawl4ai:11235`)
+- **Ollama** — локальные LLM (internal: `http://ollama:11434`)
+- **n8n/Flowise** — автоматизация (webhooks)
+
+**Critical Pattern:**
+```python
+# ✅ ВСЕГДА используйте timeouts
+async with httpx.AsyncClient(timeout=30.0) as client:
+    response = await client.get(url)
+
+# ❌ НИКОГДА без timeout
+async with httpx.AsyncClient() as client:  # NO! Infinite wait!
+    response = await client.get(url)
+```
 
 ## 🔍 Qdrant (Vector Database)
 
 ### Configuration
 
 ```python
-# rag_service/vector_db.py
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams
 
-class QdrantConfig:
-    # URLs
-    INTERNAL_URL = "http://qdrant:6333"  # Inside Docker
-    EXTERNAL_URL = "https://qdrant.produman.studio"  # Public
-    
-    # API Key
-    API_KEY = os.getenv("QDRANT_API_KEY")
-    
-    # Vector config
-    VECTOR_SIZE = 1536  # GigaChat embeddings
-    DISTANCE = Distance.COSINE
-    
-    # Performance
-    BATCH_SIZE = 100  # Max points per upsert
-    TIMEOUT = 30  # Seconds
-
-# Client initialization
+# Client
 qdrant_client = QdrantClient(
-    url=QdrantConfig.INTERNAL_URL,
-    api_key=QdrantConfig.API_KEY,
-    timeout=QdrantConfig.TIMEOUT
+    url=os.getenv("QDRANT_URL", "http://qdrant:6333"),
+    api_key=os.getenv("QDRANT_API_KEY"),
+    timeout=30
 )
+
+# Vector config
+VECTOR_SIZE = 1536  # GigaChat embeddings
+DISTANCE = Distance.COSINE
+BATCH_SIZE = 100  # Max points per upsert
 ```
 
-### Best Practices
+### Essential Patterns
 
 ```python
-# 1. Изоляция по пользователям
+# ✅ User isolation
 collection_name = f"user_{user_id}_posts"
 
-# 2. Metadata для фильтрации
+# ✅ Metadata для фильтрации
 payload = {
     "channel_id": channel.id,
     "tags": post.tags,
     "posted_at": post.posted_at.isoformat()
 }
 
-# 3. Batch operations
+# ✅ Batch operations
 points = [
-    {
-        "id": post.id,
-        "vector": embedding,
-        "payload": metadata
-    }
-    for post in posts[:100]  # Max 100 at once
+    {"id": post.id, "vector": embedding, "payload": metadata}
+    for post in posts[:100]  # Max 100!
 ]
+qdrant_client.upsert(collection_name=collection_name, points=points)
 
-qdrant_client.upsert(
-    collection_name=collection_name,
-    points=points
-)
-
-# 4. Score threshold
+# ✅ Score threshold
 results = qdrant_client.search(
     collection_name=collection_name,
     query_vector=query_embedding,
     limit=10,
-    score_threshold=0.7  # Minimum relevance
+    score_threshold=0.7
 )
 ```
 
@@ -96,7 +96,7 @@ results = qdrant_client.search(
 import redis
 import json
 
-# Connection (БЕЗ пароля!)
+# БЕЗ пароля!
 redis_client = redis.Redis(
     host=os.getenv("REDIS_HOST", "redis"),
     port=int(os.getenv("REDIS_PORT", 6379)),
@@ -111,56 +111,6 @@ except redis.ConnectionError as e:
     print(f"❌ Redis unavailable: {e}")
 ```
 
-### Use Cases
-
-```python
-# 1. Embeddings Cache (24h)
-EMBEDDING_TTL = 86400
-
-def cache_embedding(text_hash: str, embedding: List[float]):
-    redis_client.setex(
-        f"embedding:{text_hash}",
-        EMBEDDING_TTL,
-        json.dumps(embedding)
-    )
-
-def get_cached_embedding(text_hash: str) -> Optional[List[float]]:
-    cached = redis_client.get(f"embedding:{text_hash}")
-    return json.loads(cached) if cached else None
-
-# 2. QR Sessions (10 минут)
-QR_SESSION_TTL = 600
-
-def save_qr_session(session_id: str, data: dict):
-    redis_client.setex(
-        f"qr_session:{session_id}",
-        QR_SESSION_TTL,
-        json.dumps(data)
-    )
-
-# 3. Admin Sessions (1 час)
-ADMIN_SESSION_TTL = 3600
-
-def save_admin_session(token: str, admin_data: dict):
-    redis_client.setex(
-        f"admin_session:{token}",
-        ADMIN_SESSION_TTL,
-        json.dumps(admin_data)
-    )
-
-# 4. Rate Limiting (1 минута)
-RATE_LIMIT_WINDOW = 60
-
-def check_rate_limit(user_id: int, endpoint: str, limit: int) -> bool:
-    key = f"rate:{user_id}:{endpoint}"
-    current = redis_client.incr(key)
-    
-    if current == 1:
-        redis_client.expire(key, RATE_LIMIT_WINDOW)
-    
-    return current <= limit
-```
-
 ### TTL Policy
 
 ```python
@@ -171,6 +121,11 @@ TTL_POLICY = {
     "admin_sessions": 3600,   # 1 hour
     "rate_limits": 60         # 1 minute
 }
+
+# Usage
+redis_client.setex(f"embedding:{text_hash}", 86400, json.dumps(embedding))
+redis_client.setex(f"qr_session:{id}", 600, json.dumps(session_data))
+redis_client.setex(f"admin_session:{token}", 3600, json.dumps(admin_data))
 ```
 
 ## 🔎 Searxng (Meta Search Engine)
@@ -182,10 +137,9 @@ class SearxngConfig:
     URL = os.getenv("SEARXNG_URL", "https://searxng.produman.studio")
     USERNAME = os.getenv("SEARXNG_USER")
     PASSWORD = os.getenv("SEARXNG_PASSWORD")
-    TIMEOUT = 10  # Seconds
-    MAX_RESULTS = 5  # Per query
+    TIMEOUT = 10
+    MAX_RESULTS = 5
 
-# HTTP client с auth
 searxng_auth = httpx.BasicAuth(
     SearxngConfig.USERNAME,
     SearxngConfig.PASSWORD
@@ -196,9 +150,7 @@ searxng_auth = httpx.BasicAuth(
 
 ```python
 async def enhance_rag_with_web(query: str) -> List[str]:
-    """
-    Расширить RAG контекст веб-поиском
-    """
+    """Расширить RAG контекст веб-поиском"""
     async with httpx.AsyncClient(
         auth=searxng_auth,
         timeout=SearxngConfig.TIMEOUT
@@ -217,31 +169,7 @@ async def enhance_rag_with_web(query: str) -> List[str]:
         response.raise_for_status()
         results = response.json()["results"][:SearxngConfig.MAX_RESULTS]
         
-        return [
-            r["content"]
-            for r in results
-            if r.get("content")
-        ]
-
-# Integration
-async def hybrid_search(user_id: int, query: str):
-    """
-    Гибридный поиск: посты + веб
-    """
-    # 1. Поиск в постах (RAG)
-    posts_results = await rag_service.search(user_id, query)
-    
-    # 2. Поиск в вебе (Searxng)
-    web_results = await enhance_rag_with_web(query)
-    
-    # 3. Combine context
-    context = {
-        "posts": posts_results,
-        "web": web_results
-    }
-    
-    # 4. Generate answer
-    return await rag_generator.generate_answer(query, context)
+        return [r["content"] for r in results if r.get("content")]
 ```
 
 ## 🕷️ Crawl4AI (Web Scraping)
@@ -251,8 +179,8 @@ async def hybrid_search(user_id: int, query: str):
 ```python
 class Crawl4AIConfig:
     URL = "http://crawl4ai:11235"
-    TIMEOUT = 30  # Seconds
-    WORD_COUNT_THRESHOLD = 100  # Minimum words
+    TIMEOUT = 30
+    WORD_COUNT_THRESHOLD = 100
     MAX_LINKS_PER_POST = 10
 ```
 
@@ -260,16 +188,12 @@ class Crawl4AIConfig:
 
 ```python
 async def enrich_post_with_links(post: Post):
-    """
-    Автоматическое извлечение контента из ссылок
-    """
-    # 1. Extract URLs
+    """Автоматическое извлечение контента из ссылок"""
     urls = extract_urls(post.text)
     
     if not urls:
         return
     
-    # 2. Crawl URLs (до 10)
     enriched_content = []
     
     for url in urls[:Crawl4AIConfig.MAX_LINKS_PER_POST]:
@@ -295,51 +219,25 @@ async def enrich_post_with_links(post: Post):
             logger.warning(f"Failed to crawl {url}: {e}")
             continue
     
-    # 3. Save enriched_content
     if enriched_content:
         post.enriched_content = "\n\n---\n\n".join(enriched_content)
         db.commit()
         
-        # 4. Re-index с новым контентом
+        # Re-index
         await rag_service.reindex_post(post.id)
-
-# Usage
-async def parse_channel_with_enrichment(channel_id: int):
-    """
-    Парсинг с автоматическим обогащением
-    """
-    posts = await fetch_channel_posts(channel_id)
-    
-    for post in posts:
-        # Save post
-        db.add(post)
-        db.commit()
-        
-        # Enrich in background
-        background_tasks.add_task(enrich_post_with_links, post)
 ```
 
-### Best Practices
+### Caching Pattern
 
 ```python
-# 1. Batch extraction
-urls_batch = [url for post in posts for url in extract_urls(post.text)]
-urls_batch = urls_batch[:100]  # Limit
-
-# 2. Caching в Redis
 def cache_crawled_url(url: str, content: str):
+    """Cache crawled content (1 week)"""
     url_hash = hashlib.md5(url.encode()).hexdigest()
     redis_client.setex(
         f"crawl:{url_hash}",
         86400 * 7,  # 1 неделя
         content
     )
-
-# 3. Retry для 5xx ошибок
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
-async def crawl_url_with_retry(url: str):
-    # ... crawl logic ...
-    pass
 ```
 
 ## 🤖 Ollama (Local LLM)
@@ -350,16 +248,14 @@ async def crawl_url_with_retry(url: str):
 class OllamaConfig:
     URL = "http://ollama:11434"
     DEFAULT_MODEL = "llama3.2"
-    TIMEOUT = 60  # Seconds (LLM slower)
+    TIMEOUT = 60  # LLM slower
 ```
 
-### Use Case: Private Processing
+### Usage Example
 
 ```python
 async def anonymize_with_ollama(text: str) -> str:
-    """
-    Локальная обработка без отправки в облако
-    """
+    """Локальная обработка без отправки в облако"""
     async with httpx.AsyncClient(timeout=OllamaConfig.TIMEOUT) as client:
         response = await client.post(
             f"{OllamaConfig.URL}/api/generate",
@@ -372,20 +268,6 @@ async def anonymize_with_ollama(text: str) -> str:
         
         response.raise_for_status()
         return response.json()["response"]
-
-# Usage
-async def process_sensitive_post(post: Post):
-    """
-    Обработка чувствительных данных локально
-    """
-    # 1. Anonymize через Ollama
-    anonymized_text = await anonymize_with_ollama(post.text)
-    
-    # 2. Index anonymized version
-    await rag_indexer.index_post(
-        post_id=post.id,
-        text_override=anonymized_text
-    )
 ```
 
 ## 🔗 n8n & Flowise Integration
@@ -393,26 +275,22 @@ async def process_sensitive_post(post: Post):
 ### Webhooks для событий
 
 ```python
-# parser_service.py
 async def notify_webhooks(event: str, data: dict):
-    """
-    Отправка событий в n8n/Flowise
-    """
+    """Отправка событий в n8n/Flowise"""
     webhook_url = os.getenv(f"WEBHOOK_{event.upper()}")
     
     if not webhook_url:
         return
     
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=10.0) as client:
             await client.post(
                 webhook_url,
                 json={
                     "event": event,
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                     "data": data
-                },
-                timeout=10.0
+                }
             )
     except Exception as e:
         logger.warning(f"Webhook failed: {e}")
@@ -424,14 +302,6 @@ WEBHOOK_EVENTS = [
     "post_indexed",   # Пост индексирован в Qdrant
     "digest_sent"     # Дайджест отправлен
 ]
-
-# Usage
-async def after_post_parsed(post: Post):
-    await notify_webhooks("new_post", {
-        "post_id": post.id,
-        "channel": post.channel.channel_username,
-        "text": post.text[:200]
-    })
 ```
 
 ### n8n-friendly Endpoints
@@ -444,9 +314,7 @@ async def get_recent_posts_for_n8n(
     include_embeddings: bool = False,
     db: Session = Depends(get_db)
 ):
-    """
-    Rich payload для n8n workflows
-    """
+    """Rich payload для n8n workflows"""
     posts = db.query(Post).filter(
         Post.user_id == user_id,
         Post.posted_at >= datetime.now(timezone.utc) - timedelta(hours=hours)
@@ -465,70 +333,92 @@ async def get_recent_posts_for_n8n(
     } for p in posts]
 ```
 
-## ✅ Verification Steps
+## ✅ Verification Checklist
 
-1. **Qdrant доступен:**
-```bash
-curl http://localhost:6333/collections
-# {"result": {"collections": [...]}}
-```
+- [ ] All external API calls have timeouts (10-60s)
+- [ ] Redis TTL set for all cached data
+- [ ] Qdrant collections isolated by user
+- [ ] Crawl4AI limited to max 10 links per post
+- [ ] Webhooks have error handling (try-except)
+- [ ] Batch operations limited (max 100 items)
+- [ ] Auth credentials stored in environment variables
+- [ ] Healthchecks for all external services
 
-2. **Redis доступен:**
-```bash
-docker exec redis redis-cli PING
-# PONG
-```
+## ❌ Deprecated Patterns
 
-3. **Searxng доступен:**
-```bash
-curl -u "$USERNAME:$PASSWORD" \
-  "https://searxng.produman.studio/search?q=test&format=json"
-# {"results": [...]}
-```
-
-4. **Crawl4AI доступен:**
-```bash
-curl -X POST http://localhost:11235/crawl \
-  -H "Content-Type: application/json" \
-  -d '{"url": "https://example.com"}'
-# {"markdown": "...", ...}
-```
-
-5. **Ollama доступен:**
-```bash
-curl http://localhost:11434/api/tags
-# {"models": [...]}
-```
-
-## 🚨 Troubleshooting
-
-### Qdrant недоступен
-
-```bash
-# Проверьте контейнер
-docker ps | grep qdrant
-
-# Проверьте логи
-docker logs qdrant
-
-# Проверьте API
-curl http://localhost:6333/
-```
-
-### Crawl4AI timeout
+**NEVER do this:**
 
 ```python
-# Увеличьте timeout
-Crawl4AIConfig.TIMEOUT = 60
+# ❌ No timeout
+async with httpx.AsyncClient() as client:
+    response = await client.get(url)  # NO! Infinite wait!
 
-# Или используйте retry
-@retry(stop=stop_after_attempt(3))
-async def crawl_url(url: str):
-    pass
+# ❌ No cache
+content = await crawl_url(url)  # Expensive!
+
+# ❌ No TTL
+redis_client.set(f"data:{key}", value)  # NO! Set TTL!
+
+# ❌ Shared collection
+collection = "posts"  # NO! User isolation!
+
+# ❌ No batch limit
+for url in all_urls:  # Could be 1000+!
+    await crawl_url(url)
+
+# ❌ Silent webhook failure
+await client.post(webhook_url, json=data)  # NO! Wrap in try-except!
 ```
 
-## 📚 Связанные правила
+## 🎯 Quick Examples
 
-- `03-database.mdc` — Redis cache
+### ✅ Correct
+
+```python
+# Timeout
+async with httpx.AsyncClient(timeout=30.0) as client:
+    response = await client.get(url)
+
+# Cache with TTL
+redis_client.setex(f"cache:{key}", 86400, value)
+
+# User isolation
+collection = f"user_{user_id}_posts"
+
+# Batch limit
+for batch in chunks(items, 100):
+    await process_batch(batch)
+
+# Error handling
+try:
+    await notify_webhooks("event", data)
+except Exception as e:
+    logger.warning(f"Webhook failed: {e}")
+```
+
+### ❌ Bad
+
+```python
+# No timeout
+async with httpx.AsyncClient() as client:
+    response = await client.get(url)
+
+# No TTL
+redis_client.set(key, value)
+
+# Shared
+collection = "posts"
+
+# No limit
+for item in all_items:
+    process(item)
+
+# Silent error
+await notify_webhooks("event", data)
+```
+
+## 📚 Related Rules
+
+- `03-database.mdc` — Redis cache patterns
 - `07-rag.mdc` — Qdrant, embeddings
 - `08-api.mdc` — n8n endpoints
