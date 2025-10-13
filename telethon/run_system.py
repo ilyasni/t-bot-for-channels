@@ -11,8 +11,22 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-logging.basicConfig(level=logging.INFO)
+# Настройка логирования с поддержкой DEBUG режима
+log_level = logging.DEBUG if os.getenv('DEBUG_LOGS', 'false').lower() == 'true' else logging.INFO
+logging.basicConfig(
+    level=log_level,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
+
+if os.getenv('DEBUG_LOGS', 'false').lower() == 'true':
+    logger.info("🐛 DEBUG режим включен для run_system.py")
+    logging.getLogger('httpx').setLevel(logging.DEBUG)
+else:
+    # Отключаем избыточные логи библиотек
+    logging.getLogger('httpx').setLevel(logging.WARNING)
+    logging.getLogger('telethon').setLevel(logging.WARNING)
+    logging.getLogger('telegram.ext').setLevel(logging.WARNING)
 
 class TelegramSystem:
     def __init__(self):
@@ -33,9 +47,9 @@ class TelegramSystem:
             await self.parser_service.initialize()
             logger.info("✅ ParserService инициализирован для многопользовательского режима")
             
-            # Инициализируем бота (отключено - запускается отдельно)
-            # self.bot = TelegramBot()
-            # logger.info("✅ TelegramBot инициализирован")
+            # Инициализируем бота (теперь в том же контейнере!)
+            self.bot = TelegramBot()
+            logger.info("✅ TelegramBot инициализирован")
             
             return True
             
@@ -43,12 +57,12 @@ class TelegramSystem:
             logger.error(f"❌ Ошибка инициализации системы: {str(e)}")
             return False
     
-    def start_bot(self):
-        """Запуск бота в отдельном потоке"""
+    async def start_bot(self):
+        """Запуск бота (async)"""
         try:
             logger.info("🤖 Запуск Telegram бота...")
-            # Запускаем бота синхронно в отдельном потоке
-            self.bot.run()
+            # Запускаем бота в async режиме
+            await self.bot.run_async()
         except Exception as e:
             logger.error(f"❌ Ошибка запуска бота: {str(e)}")
     
@@ -90,7 +104,9 @@ class TelegramSystem:
         
         self.is_running = True
         
-        # Бот запускается отдельно через bot_standalone.py
+        # Запускаем бота в async task (теперь в том же контейнере!)
+        asyncio.create_task(self.start_bot())
+        logger.info("🤖 Telegram Bot запущен в async task")
         
         # Запускаем API в отдельном потоке
         api_thread = threading.Thread(target=self.start_api, daemon=True)

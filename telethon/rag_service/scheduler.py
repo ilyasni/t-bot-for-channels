@@ -187,51 +187,64 @@ class DigestScheduler:
             
             telegram_id = user.telegram_id
             
-            # Отправка через Telegram Bot API
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            # Отправка через Telegram Bot API с retry механизмом
+            max_retries = 3
+            retry_delay = 2  # секунды
+            
+            for attempt in range(max_retries):
                 try:
-                    # Разбиваем длинный дайджест на части (макс 4096 символов в Telegram)
-                    max_length = 4000  # Оставляем запас
-                    
-                    if len(digest_text) <= max_length:
-                        messages = [digest_text]
-                    else:
-                        # Разбиваем по параграфам
-                        messages = []
-                        current_message = ""
+                    async with httpx.AsyncClient(timeout=30.0) as client:
+                        # Разбиваем длинный дайджест на части (макс 4096 символов в Telegram)
+                        max_length = 4000  # Оставляем запас
                         
-                        for line in digest_text.split("\n"):
-                            if len(current_message) + len(line) + 1 <= max_length:
-                                current_message += line + "\n"
-                            else:
-                                if current_message:
-                                    messages.append(current_message)
-                                current_message = line + "\n"
+                        if len(digest_text) <= max_length:
+                            messages = [digest_text]
+                        else:
+                            # Разбиваем по параграфам
+                            messages = []
+                            current_message = ""
+                            
+                            for line in digest_text.split("\n"):
+                                if len(current_message) + len(line) + 1 <= max_length:
+                                    current_message += line + "\n"
+                                else:
+                                    if current_message:
+                                        messages.append(current_message)
+                                    current_message = line + "\n"
+                            
+                            if current_message:
+                                messages.append(current_message)
                         
-                        if current_message:
-                            messages.append(current_message)
-                    
-                    # Отправляем все части
-                    for i, message in enumerate(messages):
-                        response = await client.post(
-                            f"https://api.telegram.org/bot{bot_token}/sendMessage",
-                            json={
-                                "chat_id": telegram_id,
-                                "text": message,
-                                "parse_mode": "Markdown" if settings.format == "markdown" else None,
-                                "disable_web_page_preview": True
-                            }
-                        )
+                        # Отправляем все части
+                        for i, message in enumerate(messages):
+                            response = await client.post(
+                                f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                                json={
+                                    "chat_id": telegram_id,
+                                    "text": message,
+                                    "parse_mode": "Markdown" if settings.format == "markdown" else None,
+                                    "disable_web_page_preview": True
+                                }
+                            )
+                            
+                            if response.status_code != 200:
+                                logger.error(f"❌ Ошибка отправки дайджеста в Telegram: {response.status_code} - {response.text[:200]}")
+                                raise Exception(f"Telegram API returned {response.status_code}")
+                            
+                            logger.info(f"✅ Часть {i+1}/{len(messages)} дайджеста отправлена user {user_id}")
                         
-                        if response.status_code != 200:
-                            logger.error(f"❌ Ошибка отправки дайджеста в Telegram: {response.status_code} - {response.text[:200]}")
-                            return
+                        # Успешная отправка - выходим из retry loop
+                        break
                         
-                        logger.info(f"✅ Часть {i+1}/{len(messages)} дайджеста отправлена user {user_id}")
-                    
                 except Exception as e:
-                    logger.error(f"❌ Ошибка отправки в Telegram: {e}")
-                    return
+                    if attempt < max_retries - 1:
+                        logger.warning(f"⚠️ Попытка {attempt + 1}/{max_retries} не удалась: {e}. Повтор через {retry_delay} сек...")
+                        import asyncio
+                        await asyncio.sleep(retry_delay)
+                        retry_delay *= 2  # Exponential backoff
+                    else:
+                        logger.error(f"❌ Все {max_retries} попытки отправки дайджеста провалились: {e}")
+                        return
             
             # Обновляем last_sent_at в БД
             settings.last_sent_at = datetime.now(pytz.UTC)

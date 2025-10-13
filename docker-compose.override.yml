@@ -47,6 +47,8 @@ services:
       - OPENROUTER_MODEL=${OPENROUTER_MODEL:-deepseek/deepseek-chat-v3.1:free}
       # Base URL для Mini App (QR авторизация)
       - AUTH_BASE_URL=${AUTH_BASE_URL:-https://telegram-auth.produman.studio}
+      # Debug Settings
+      - DEBUG_LOGS=${DEBUG_LOGS:-false}
       # Redis (для QR сессий shared между контейнерами)
       - REDIS_HOST=redis
       - REDIS_PORT=6379
