@@ -893,6 +893,34 @@ async def get_user_interests(user_id: int):
         raise HTTPException(500, f"Ошибка получения интересов: {str(e)}")
 
 
+@app.post("/rag/digest/send/{user_id}")
+async def send_digest_now(user_id: int):
+    """
+    Отправить дайджест пользователю прямо сейчас (ручной триггер)
+    
+    Args:
+        user_id: ID пользователя
+        
+    Returns:
+        Статус отправки
+    """
+    try:
+        logger.info(f"🔔 Ручная отправка дайджеста для user {user_id}")
+        
+        # Вызываем метод scheduler для отправки дайджеста
+        await digest_scheduler._send_digest(user_id)
+        
+        return {
+            "status": "success",
+            "message": f"Дайджест отправлен пользователю {user_id}",
+            "user_id": user_id
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка ручной отправки дайджеста: {e}")
+        raise HTTPException(500, f"Ошибка отправки дайджеста: {str(e)}")
+
+
 @app.get("/rag/recommend/{user_id}")
 async def get_recommendations(user_id: int, limit: int = 5):
     """

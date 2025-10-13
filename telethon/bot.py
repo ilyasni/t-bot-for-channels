@@ -35,11 +35,21 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Включаем DEBUG для ConversationHandler
-logging.getLogger('telegram.ext.ConversationHandler').setLevel(logging.DEBUG)
-logging.getLogger('telegram.ext').setLevel(logging.DEBUG)
-
 load_dotenv()
+
+# DEBUG логи для отладки (управляется через переменную окружения)
+# Установите DEBUG_LOGS=true в .env для включения детальных логов
+if os.getenv('DEBUG_LOGS', 'false').lower() == 'true':
+    logger.info("🐛 DEBUG логи включены (telegram.ext, ConversationHandler, httpx)")
+    logging.getLogger('telegram.ext.ConversationHandler').setLevel(logging.DEBUG)
+    logging.getLogger('telegram.ext').setLevel(logging.DEBUG)
+    logging.getLogger('telethon').setLevel(logging.DEBUG)
+    logging.getLogger('httpx').setLevel(logging.DEBUG)
+else:
+    # По умолчанию - только WARNING для библиотек
+    logging.getLogger('telegram.ext').setLevel(logging.WARNING)
+    logging.getLogger('telethon').setLevel(logging.WARNING)
+    logging.getLogger('httpx').setLevel(logging.WARNING)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
@@ -1872,13 +1882,24 @@ class TelegramBot:
             db.close()
     
     def run(self):
-        """Запуск бота"""
+        """Запуск бота (синхронный для standalone)"""
         print("🤖 Запуск Telegram бота...")
         # Явно указываем, что хотим получать callback_query updates
         self.application.run_polling(
             allowed_updates=["message", "callback_query", "edited_message"]
         )
         logger.info("✅ Бот запущен с поддержкой: message, callback_query, edited_message")
+    
+    async def run_async(self):
+        """Запуск бота (async для интеграции в run_system.py)"""
+        logger.info("🤖 Запуск Telegram бота (async)...")
+        # Инициализируем и запускаем бота
+        await self.application.initialize()
+        await self.application.start()
+        await self.application.updater.start_polling(
+            allowed_updates=["message", "callback_query", "edited_message"]
+        )
+        logger.info("✅ Telegram Bot запущен в async режиме")
 
 if __name__ == "__main__":
     from database import create_tables

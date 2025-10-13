@@ -466,17 +466,31 @@ class SharedAuthManager:
         lock = self._get_client_lock(telegram_id)
         
         async with lock:
-            # Если клиент уже активен
+            # Если клиент уже активен - проверяем event loop
             if telegram_id in self.active_clients:
                 client = self.active_clients[telegram_id]
-                if client.is_connected():
-                    return client
-                else:
-                    await client.connect()
+                
+                # ВАЖНО: Проверяем что клиент в правильном event loop
+                try:
                     if client.is_connected():
-                        return client
+                        # Проверяем event loop
+                        current_loop = asyncio.get_event_loop()
+                        if client.loop != current_loop:
+                            logger.warning(f"⚠️ Client {telegram_id} в другом event loop - пересоздаем")
+                            await client.disconnect()
+                            del self.active_clients[telegram_id]
+                        else:
+                            return client
+                    else:
+                        await client.connect()
+                        if client.is_connected():
+                            return client
+                except Exception as e:
+                    logger.warning(f"⚠️ Ошибка проверки клиента {telegram_id}: {e} - пересоздаем")
+                    if telegram_id in self.active_clients:
+                        del self.active_clients[telegram_id]
             
-            # Создаем новый клиент
+            # Создаем новый клиент в текущем event loop
             client = await self._create_client(telegram_id)
             await client.connect()
             
@@ -495,6 +509,7 @@ class SharedAuthManager:
                 raise SecurityError("Session file belongs to another user!")
             
             self.active_clients[telegram_id] = client
+            logger.info(f"✅ Client {telegram_id} создан в event loop {id(client.loop)}")
             return client
     
     async def disconnect_client(self, telegram_id: int):
