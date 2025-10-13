@@ -1,0 +1,590 @@
+---
+title: "RAG System"
+description: "Векторный поиск, AI-генерация, дайджесты, Qdrant"
+tags: ["rag", "vector-search", "ai", "qdrant", "embeddings"]
+version: "3.1"
+---
+
+# RAG System
+
+## 🎯 High-Level Overview
+
+**RAG Service** — микросервис для векторного поиска и AI-генерации ответов.
+
+**Stack:**
+- Qdrant (векторная БД)
+- GigaChat (embeddings)
+- Redis (cache)
+- OpenRouter (LLM generation)
+
+```
+User Query → Embedding → Qdrant Search → Top K Results
+                                              ↓
+                                    Context + Query → LLM → Answer
+```
+
+## 🏗️ RAG Architecture
+
+### Pipeline
+
+```python
+# 1. Индексирование (автоматическое)
+Post → Embedding (GigaChat) → Qdrant Vector → Indexed
+     ↓ (кеш)
+   Redis (24h TTL)
+
+# 2. Поиск и генерация
+User Query → Embedding → Qdrant Search → Top K Results
+                                              ↓
+                                    Context + Query → LLM → Answer
+```
+
+### Микросервис
+
+```yaml
+# docker-compose.override.yml
+rag-service:
+  build: ./telethon/rag_service
+  ports:
+    - "8020:8020"
+  environment:
+    - QDRANT_URL=http://qdrant:6333
+    - REDIS_HOST=redis
+    - GIGACHAT_PROXY_URL=http://gpt2giga-proxy:8090
+```
+
+## 📦 Components
+
+### 1. Vector DB (Qdrant)
+
+```python
+# rag_service/vector_db.py
+from qdrant_client import QdrantClient
+from qdrant_client.models import Distance, VectorParams, Filter, FieldCondition
+
+class VectorDB:
+    def __init__(self):
+        self.client = QdrantClient(
+            url=os.getenv("QDRANT_URL", "http://qdrant:6333"),
+            api_key=os.getenv("QDRANT_API_KEY")
+        )
+    
+    async def create_collection(self, user_id: int):
+        """
+        Создать коллекцию для пользователя
+        """
+        collection_name = f"user_{user_id}_posts"
+        
+        # Проверка существования
+        collections = self.client.get_collections().collections
+        if collection_name in [c.name for c in collections]:
+            return
+        
+        # Создание коллекции
+        self.client.create_collection(
+            collection_name=collection_name,
+            vectors_config=VectorParams(
+                size=1536,  # GigaChat embeddings dimension
+                distance=Distance.COSINE
+            )
+        )
+    
+    async def upsert_post(
+        self,
+        user_id: int,
+        post_id: int,
+        embedding: List[float],
+        metadata: dict
+    ):
+        """
+        Добавить/обновить пост
+        """
+        collection_name = f"user_{user_id}_posts"
+        
+        # Metadata для фильтрации
+        payload = {
+            "post_id": post_id,
+            "channel_id": metadata.get("channel_id"),
+            "channel_username": metadata.get("channel_username"),
+            "tags": metadata.get("tags", []),
+            "posted_at": metadata.get("posted_at"),
+            "url": metadata.get("url"),
+            "text": metadata.get("text")[:500]  # Первые 500 символов
+        }
+        
+        self.client.upsert(
+            collection_name=collection_name,
+            points=[{
+                "id": post_id,
+                "vector": embedding,
+                "payload": payload
+            }]
+        )
+    
+    async def search(
+        self,
+        user_id: int,
+        query_vector: List[float],
+        filters: Optional[dict] = None,
+        top_k: int = 10,
+        score_threshold: float = 0.7
+    ) -> List[dict]:
+        """
+        Векторный поиск
+        """
+        collection_name = f"user_{user_id}_posts"
+        
+        # Фильтры
+        query_filter = None
+        if filters:
+            conditions = []
+            
+            if "channel_id" in filters:
+                conditions.append(
+                    FieldCondition(
+                        key="channel_id",
+                        match={"value": filters["channel_id"]}
+                    )
+                )
+            
+            if "tags" in filters:
+                conditions.append(
+                    FieldCondition(
+                        key="tags",
+                        match={"any": filters["tags"]}
+                    )
+                )
+            
+            if conditions:
+                query_filter = Filter(must=conditions)
+        
+        # Поиск
+        results = self.client.search(
+            collection_name=collection_name,
+            query_vector=query_vector,
+            query_filter=query_filter,
+            limit=top_k,
+            score_threshold=score_threshold
+        )
+        
+        return [
+            {
+                "post_id": r.id,
+                "score": r.score,
+                **r.payload
+            }
+            for r in results
+        ]
+```
+
+### 2. Embeddings Service
+
+```python
+# rag_service/embeddings.py
+import httpx
+import hashlib
+import json
+from typing import List
+
+class EmbeddingsService:
+    def __init__(self):
+        self.gigachat_url = os.getenv(
+            "GIGACHAT_PROXY_URL",
+            "http://gpt2giga-proxy:8090"
+        )
+        
+        # Redis cache
+        self.redis_client = redis.Redis(
+            host=os.getenv("REDIS_HOST", "redis"),
+            port=6379,
+            decode_responses=True
+        )
+        self.cache_ttl = 86400  # 24 hours
+    
+    async def generate(self, text: str) -> List[float]:
+        """
+        Генерация embedding с кешированием
+        """
+        # Cache key
+        text_hash = hashlib.md5(text.encode()).hexdigest()
+        cache_key = f"embedding:{text_hash}"
+        
+        # Check cache
+        cached = self.redis_client.get(cache_key)
+        if cached:
+            return json.loads(cached)
+        
+        # Generate через GigaChat
+        embedding = await self._generate_gigachat(text)
+        
+        # Save to cache
+        self.redis_client.setex(
+            cache_key,
+            self.cache_ttl,
+            json.dumps(embedding)
+        )
+        
+        return embedding
+    
+    async def _generate_gigachat(self, text: str) -> List[float]:
+        """
+        GigaChat embeddings (EmbeddingsGigaR)
+        """
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{self.gigachat_url}/v1/embeddings",
+                json={
+                    "model": "EmbeddingsGigaR",
+                    "input": text
+                },
+                timeout=30.0
+            )
+            
+            response.raise_for_status()
+            data = response.json()
+            
+            return data["data"][0]["embedding"]
+```
+
+### 3. RAG Generator
+
+```python
+# rag_service/generator.py
+from typing import List, Dict, Any
+
+class RAGGenerator:
+    def __init__(self):
+        self.openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
+        self.model = os.getenv("OPENROUTER_MODEL", "google/gemini-2.0-flash-exp:free")
+    
+    async def generate_answer(
+        self,
+        query: str,
+        context_posts: List[dict],
+        max_tokens: int = 500,
+        temperature: float = 0.3
+    ) -> Dict[str, Any]:
+        """
+        RAG-генерация ответа
+        """
+        # 1. Формируем контекст
+        context_text = self._format_context(context_posts)
+        
+        # 2. Prompt для LLM
+        prompt = f"""На основе следующего контекста ответь на вопрос пользователя.
+
+Контекст из Telegram каналов:
+{context_text}
+
+Вопрос: {query}
+
+Инструкции:
+- Отвечай на русском языке
+- Используй только информацию из контекста
+- Если в контексте нет ответа, скажи об этом
+- Укажи источники (каналы) из которых взята информация
+
+Ответ:"""
+        
+        # 3. Генерация через OpenRouter
+        answer = await self._generate_openrouter(
+            prompt,
+            max_tokens=max_tokens,
+            temperature=temperature
+        )
+        
+        # 4. Prepare response
+        return {
+            "answer": answer,
+            "sources": [
+                {
+                    "post_id": p["post_id"],
+                    "channel": p["channel_username"],
+                    "url": p["url"],
+                    "score": p["score"]
+                }
+                for p in context_posts
+            ],
+            "context_size": len(context_posts)
+        }
+    
+    def _format_context(self, posts: List[dict]) -> str:
+        """
+        Форматирование контекста
+        """
+        formatted = []
+        
+        for i, post in enumerate(posts, 1):
+            formatted.append(
+                f"[Источник {i}: @{post['channel_username']}, "
+                f"релевантность: {post['score']:.2f}]\n"
+                f"{post['text']}\n"
+            )
+        
+        return "\n---\n".join(formatted)
+    
+    async def _generate_openrouter(
+        self,
+        prompt: str,
+        max_tokens: int,
+        temperature: float
+    ) -> str:
+        """
+        OpenRouter API call
+        """
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {self.openrouter_api_key}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": self.model,
+                    "messages": [
+                        {"role": "user", "content": prompt}
+                    ],
+                    "max_tokens": max_tokens,
+                    "temperature": temperature
+                },
+                timeout=60.0
+            )
+            
+            response.raise_for_status()
+            data = response.json()
+            
+            return data["choices"][0]["message"]["content"]
+```
+
+### 4. Indexer Service
+
+```python
+# rag_service/indexer.py
+from typing import Optional
+
+class IndexerService:
+    def __init__(self):
+        self.vector_db = VectorDB()
+        self.embeddings_service = EmbeddingsService()
+    
+    async def index_post(self, post_id: int, user_id: int) -> bool:
+        """
+        Индексировать пост
+        """
+        # 1. Получаем пост из БД
+        db = SessionLocal()
+        post = db.query(Post).filter(Post.id == post_id).first()
+        
+        if not post:
+            db.close()
+            return False
+        
+        # 2. Генерируем embedding
+        text = post.text
+        if post.enriched_content:
+            text = f"{post.text}\n\n{post.enriched_content}"
+        
+        embedding = await self.embeddings_service.generate(text)
+        
+        # 3. Metadata
+        metadata = {
+            "channel_id": post.channel_id,
+            "channel_username": post.channel.channel_username,
+            "tags": post.tags or [],
+            "posted_at": post.posted_at.isoformat(),
+            "url": post.url,
+            "text": text
+        }
+        
+        # 4. Upsert в Qdrant
+        await self.vector_db.upsert_post(
+            user_id=user_id,
+            post_id=post.id,
+            embedding=embedding,
+            metadata=metadata
+        )
+        
+        # 5. Сохраняем статус в БД
+        status = IndexingStatus(
+            user_id=user_id,
+            post_id=post.id,
+            vector_id=f"user_{user_id}_posts:{post.id}",
+            status="success"
+        )
+        db.add(status)
+        db.commit()
+        db.close()
+        
+        return True
+    
+    async def batch_index(
+        self,
+        user_id: int,
+        post_ids: List[int]
+    ) -> Dict[str, int]:
+        """
+        Batch индексация (до 100 постов)
+        """
+        success = 0
+        failed = 0
+        
+        for batch in chunks(post_ids, 100):
+            tasks = [
+                self.index_post(post_id, user_id)
+                for post_id in batch
+            ]
+            
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            for result in results:
+                if isinstance(result, Exception):
+                    failed += 1
+                elif result:
+                    success += 1
+                else:
+                    failed += 1
+        
+        return {"success": success, "failed": failed}
+```
+
+## 🚀 RAG API Endpoints
+
+```python
+# rag_service/main.py
+from fastapi import FastAPI, HTTPException, BackgroundTasks
+
+app = FastAPI(title="RAG Service")
+
+@app.post("/rag/query")
+async def rag_query(
+    user_id: int,
+    query: str,
+    top_k: int = 10,
+    min_score: float = 0.7
+):
+    """
+    RAG-запрос
+    """
+    # 1. Embedding запроса
+    query_embedding = await embeddings_service.generate(query)
+    
+    # 2. Векторный поиск
+    results = await vector_db.search(
+        user_id=user_id,
+        query_vector=query_embedding,
+        top_k=top_k,
+        score_threshold=min_score
+    )
+    
+    if not results:
+        return {
+            "answer": "К сожалению, не нашел релевантной информации в ваших каналах.",
+            "sources": []
+        }
+    
+    # 3. Генерация ответа
+    response = await rag_generator.generate_answer(
+        query=query,
+        context_posts=results
+    )
+    
+    return response
+
+@app.post("/rag/index/post/{post_id}")
+async def index_post_endpoint(
+    post_id: int,
+    user_id: int,
+    background_tasks: BackgroundTasks
+):
+    """
+    Индексировать пост (background)
+    """
+    background_tasks.add_task(
+        indexer_service.index_post,
+        post_id,
+        user_id
+    )
+    
+    return {"status": "queued", "post_id": post_id}
+
+@app.post("/rag/index/batch")
+async def batch_index_endpoint(
+    user_id: int,
+    post_ids: List[int],
+    background_tasks: BackgroundTasks
+):
+    """
+    Batch индексация
+    """
+    background_tasks.add_task(
+        indexer_service.batch_index,
+        user_id,
+        post_ids
+    )
+    
+    return {"status": "queued", "count": len(post_ids)}
+```
+
+## ✅ Verification Steps
+
+1. **Qdrant доступен:**
+```bash
+curl http://localhost:6333/collections
+# {"result": {"collections": [...]}}
+```
+
+2. **Коллекция создана:**
+```python
+collections = qdrant_client.get_collections()
+user_collections = [c.name for c in collections if "user_" in c.name]
+assert len(user_collections) > 0
+```
+
+3. **Embeddings кешируются:**
+```bash
+docker exec redis redis-cli KEYS "embedding:*"
+# Должен показать закешированные embeddings
+```
+
+4. **Индексация работает:**
+```python
+result = await indexer_service.index_post(post_id=1, user_id=1)
+assert result == True
+```
+
+5. **RAG query работает:**
+```bash
+curl -X POST http://localhost:8020/rag/query \
+  -H "Content-Type: application/json" \
+  -d '{"user_id": 1, "query": "AI новости"}'
+# {"answer": "...", "sources": [...]}
+```
+
+## 🚨 Troubleshooting
+
+### RAG не находит посты
+
+```bash
+# 1. Проверьте индексацию
+curl http://localhost:8020/rag/index/status/1
+
+# 2. Проверьте Qdrant collection
+curl http://localhost:6333/collections/user_1_posts
+
+# 3. Проверьте embeddings cache
+docker exec redis redis-cli KEYS "embedding:*"
+```
+
+### GigaChat embeddings не работают
+
+```bash
+# Проверьте gpt2giga-proxy
+curl http://localhost:8090/v1/models
+# Должен вернуть список моделей
+```
+
+## 📚 Связанные правила
+
+- `01-core.mdc` — Основные правила
+- `03-database.mdc` — Redis cache
+- `09-external.mdc` — Qdrant, GigaChat

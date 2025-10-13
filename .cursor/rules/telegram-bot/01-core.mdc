@@ -1,0 +1,406 @@
+---
+title: "Telegram Bot Core Rules"
+description: "Основные правила и структура проекта Telegram Channel Parser Bot"
+tags: ["telegram", "core", "structure", "postgres", "timezone", "context7"]
+version: "3.2"
+priority: critical
+autoAttach: true
+scope:
+  - "telethon/**/*.py"
+  - "!telethon/tests/**"
+  - "!telethon/scripts/**"
+---
+
+# Telegram Channel Parser Bot - Core Rules
+
+## 🎯 High-Level Overview
+
+Telegram Channel Parser Bot - многопользовательская система парсинга Telegram каналов с:
+- REST API для интеграции с n8n
+- AI тегированием (OpenRouter)
+- RAG-системой для поиска
+- QR-авторизацией (без SMS)
+- Admin Panel через Mini App
+
+**Расположение:** `/home/ilyasni/n8n-server/n8n-installer/telethon/`
+
+## 📁 Структура проекта
+
+```
+telethon/
+├── README.md                  # Главная документация
+├── TESTING_GUIDE.md           # Тестирование RAG
+├── QUICK_REFERENCE.md         # Шпаргалка команд
+├── docs/                      # Документация
+│   ├── quickstart/           # Быстрые старты
+│   ├── features/             # Функции
+│   └── archive/              # Архив отчетов
+├── rag_service/              # RAG микросервис
+├── scripts/                   # Скрипты
+│   ├── setup/
+│   ├── migrations/
+│   └── utils/
+├── tests/                     # Тесты
+└── [*.py файлы]              # Код приложения
+```
+
+## 🐍 Основные компоненты
+
+### Core файлы (корень telethon/)
+```python
+bot.py                    # Telegram бот
+main.py                   # FastAPI сервер
+parser_service.py         # Парсер каналов
+models.py                 # SQLAlchemy модели
+database.py               # Подключение к БД
+tagging_service.py        # AI тегирование
+cleanup_service.py        # Retention система
+qr_auth_manager.py        # QR Login менеджер
+admin_panel_manager.py    # Admin sessions
+shared_auth_manager.py    # Telethon клиенты
+```
+
+## ⚠️ КРИТИЧНЫЕ ПРАВИЛА
+
+### 0. ВСЕГДА используйте Context7 перед разработкой
+
+**ОБЯЗАТЕЛЬНО:** Перед реализацией любой новой функции или изменением существующей:
+
+```python
+# ✅ ПРАВИЛЬНЫЙ WORKFLOW:
+# 1. Используйте Context7 для поиска решений
+#    - Telegram Bot API best practices
+#    - FastAPI async patterns
+#    - SQLAlchemy relationship patterns
+#    - Pydantic validation examples
+
+# 2. Изучите официальную документацию через Context7
+#    - Найдите примеры использования
+#    - Проверьте актуальные версии API
+#    - Узнайте best practices
+
+# 3. ТОЛЬКО после этого пишите код
+
+# ❌ НЕПРАВИЛЬНО:
+# - Начинать кодить без изучения документации
+# - Полагаться только на memory/предположения
+# - Использовать устаревшие паттерны
+```
+
+**Auto-integration hint:**
+```python
+# If uncertain about library usage, AI should automatically query:
+# Context7("library-name best practices")
+# Context7("library-name current API version")
+```
+
+**Примеры обязательного использования:**
+
+```bash
+# Перед добавлением Telegram Mini App
+→ Context7: "Telegram Mini Apps WebAppInfo best practices"
+→ Context7: "Telegram Bot API WebApp methods"
+
+# Перед работой с FastAPI
+→ Context7: "FastAPI background tasks async"
+→ Context7: "FastAPI dependency injection patterns"
+
+# Перед изменением SQLAlchemy моделей
+→ Context7: "SQLAlchemy relationships many-to-many"
+→ Context7: "SQLAlchemy timezone aware datetime PostgreSQL"
+
+# Перед интеграцией внешнего API
+→ Context7: "Qdrant Python client async"
+→ Context7: "GigaChat embeddings API"
+```
+
+**Consequences:**
+- ❌ БЕЗ Context7: устаревшие паттерны, баги, неоптимальный код
+- ✅ С Context7: актуальные best practices, меньше ошибок, быстрая разработка
+
+### 1. PostgreSQL ТОЛЬКО (БЕЗ SQLite!)
+
+```python
+# ✅ Правильно
+def get_database_url() -> str:
+    database_url = os.getenv("TELEGRAM_DATABASE_URL")
+    
+    if not database_url:
+        raise ValueError(
+            "TELEGRAM_DATABASE_URL не установлен!\n"
+            "Должен быть: postgresql://postgres:password@db:5432/postgres"
+        )
+    
+    if "sqlite" in database_url.lower():
+        raise ValueError(
+            "SQLite НЕ поддерживается!\n"
+            "Используйте только PostgreSQL (Supabase)"
+        )
+    
+    return database_url
+
+# ❌ НИКОГДА так не делайте
+db_url = os.getenv("DATABASE_URL", "sqlite:///fallback.db")  # НЕТ!
+```
+
+### 2. Timezone-Aware DateTime ВСЕГДА
+
+```python
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+
+# ✅ Правильно - UTC в БД
+now = datetime.now(timezone.utc)
+user.created_at = datetime.now(timezone.utc)
+
+# ✅ Europe/Moscow для display
+LOCAL_TZ = ZoneInfo('Europe/Moscow')
+display_time = user.created_at.astimezone(LOCAL_TZ)
+
+# ✅ Сравнение с timezone check
+if expires.tzinfo is None:
+    expires = expires.replace(tzinfo=timezone.utc)
+
+# ❌ Naive datetime - НИКОГДА!
+user.created_at = datetime.now()  # НЕТ!
+```
+
+### 3. Redis обязателен (без пароля!)
+
+```python
+# ✅ Правильно - Valkey default без пароля
+import redis
+
+redis_client = redis.Redis(
+    host=os.getenv("REDIS_HOST", "redis"),
+    port=int(os.getenv("REDIS_PORT", 6379)),
+    decode_responses=True
+)
+
+# Проверка подключения
+redis_client.ping()
+
+# ❌ НЕ указывайте password!
+redis_client = redis.Redis(host='redis', password='...')  # НЕТ!
+```
+
+### 4. Структура файлов
+
+**ВСЕГДА:**
+- Основные .py → корень `telethon/`
+- Скрипты → `scripts/{setup|migrations|utils}/`
+- Документация → `docs/{quickstart|features|migrations|troubleshooting}/`
+- Архив → `docs/archive/{reports|testing}/`
+- Только 3 MD в корне: `README.md`, `TESTING_GUIDE.md`, `QUICK_REFERENCE.md`
+
+**НИКОГДА:**
+- ❌ НЕ создавайте MD в корне telethon/ (используйте docs/)
+- ❌ НЕ размещайте скрипты в корне
+- ❌ НЕ создавайте standalone docker-compose.yml
+
+## 🔧 Code Style
+
+### Type Hints везде
+
+```python
+async def generate_answer(
+    user_id: int,
+    query: str,
+    top_k: int = 10
+) -> Dict[str, Any]:
+    """
+    Генерация ответа с использованием RAG
+    
+    Args:
+        user_id: ID пользователя
+        query: Вопрос пользователя
+        top_k: Количество документов
+        
+    Returns:
+        Dict с answer, sources, metadata
+        
+    Raises:
+        HTTPException: Если сервис недоступен
+    """
+    pass
+```
+
+### Async Everywhere
+
+```python
+# ✅ Правильно
+async with httpx.AsyncClient() as client:
+    response = await client.get(url)
+
+# ❌ Блокирует event loop
+response = requests.get(url)  # НЕТ!
+```
+
+## 📋 Многопользовательский режим
+
+**ВСЕГДА фильтруйте по user_id:**
+
+```python
+# ✅ Правильно
+posts = db.query(Post).filter(
+    Post.user_id == user_id  # Обязательно!
+).all()
+
+# ❌ Неправильно - доступ ко всем данным
+posts = db.query(Post).all()  # НЕТ!
+```
+
+## 🔐 Безопасность
+
+### Шифрование credentials
+
+```python
+from crypto_utils import encrypt_data, decrypt_data
+
+# ✅ Правильно
+user.api_key = encrypt_data(request.api_key)
+
+# ❌ Plaintext - НИКОГДА!
+user.api_key = request.api_key  # НЕТ!
+```
+
+### Защита .gitignore
+
+**Критично защищенные:**
+```gitignore
+# Telegram tokens
+sessions/
+*.session
+*.session-journal
+
+# Databases
+data/
+*.db
+*.sqlite*
+
+# Environment
+.env
+**/.env
+
+# Logs
+logs/
+*.log
+```
+
+## ✅ Verification Steps
+
+Перед коммитом проверьте:
+
+1. **Context7 использован**: Проверьте что изучили документацию через Context7
+   - Есть ссылки на источники в комментариях
+   - Паттерны соответствуют best practices из документации
+   - Версии API актуальные
+2. **PostgreSQL используется**: `grep -r "sqlite" database.py` → должен вернуть 0 результатов
+3. **Timezone-aware datetime**: Все `datetime.now()` → `datetime.now(timezone.utc)`
+4. **Redis подключение**: `redis_client.ping()` успешен
+5. **Фильтрация user_id**: Все queries содержат `.filter(... user_id == ...)`
+6. **Type hints**: Все функции с аннотациями типов
+7. **Async functions**: HTTP запросы через `httpx.AsyncClient()`
+
+## 🚨 Последствия нарушения
+
+**Игнорирование Context7:**
+- ❌ Использование устаревших API паттернов
+- ❌ Баги из-за неправильного использования библиотек
+- ❌ Неоптимальный код, не следующий best practices
+- ❌ Потеря времени на исправление ошибок
+- ❌ Несовместимость с актуальными версиями
+
+**PostgreSQL fallback на SQLite:**
+- ❌ Код не запустится в production
+- ❌ Миграции упадут с ошибками
+- ❌ Потеря timezone awareness
+
+**Отсутствие timezone:**
+- ❌ Неверные сравнения expires_at
+- ❌ Ошибки при сохранении в PostgreSQL
+- ❌ Некорректное отображение времени пользователю
+
+**Отсутствие user_id фильтрации:**
+- ❌ Утечка данных между пользователями
+- ❌ Критическая уязвимость безопасности
+
+## 🔀 Conflict Resolution
+
+**If both core and database rules apply:**
+- Follow `01-core.mdc` for PostgreSQL requirement
+- Follow `03-database.mdc` for specific model implementations
+
+**If both core and security rules apply:**
+- Follow `01-core.mdc` for timezone-aware datetime
+- Follow `05-security.mdc` for auth logic and encryption
+
+## 📝 Quick Examples
+
+### ✅ Correct: PostgreSQL only
+```python
+# Good - raises error if SQLite
+if "sqlite" in database_url.lower():
+    raise ValueError("SQLite NOT supported!")
+```
+
+### ❌ Bad: SQLite fallback
+```python
+# Bad - allows SQLite
+db_url = os.getenv("DB_URL", "sqlite:///fallback.db")
+```
+
+### ✅ Correct: Timezone-aware datetime
+```python
+# Good - always timezone-aware
+user.created_at = datetime.now(timezone.utc)
+```
+
+### ❌ Bad: Naive datetime
+```python
+# Bad - timezone-naive
+user.created_at = datetime.now()
+```
+
+### ✅ Correct: User filtering
+```python
+# Good - filters by user_id
+posts = db.query(Post).filter(Post.user_id == user_id).all()
+```
+
+### ❌ Bad: No user filtering
+```python
+# Bad - returns all users' data
+posts = db.query(Post).all()
+```
+
+### ✅ Correct: Redis prefix
+```python
+# Good - uses prefix for isolation
+redis.setex(f"qr_session:{session_id}", 300, data)
+```
+
+### ❌ Bad: No Redis prefix
+```python
+# Bad - potential key conflicts
+redis.setex(session_id, 300, data)
+```
+
+### ✅ Correct: Async HTTP
+```python
+# Good - non-blocking
+async with httpx.AsyncClient() as client:
+    response = await client.get(url)
+```
+
+### ❌ Bad: Sync HTTP
+```python
+# Bad - blocks event loop
+response = requests.get(url)
+```
+
+## 📚 Связанные правила
+
+- `02-architecture.mdc` — Микросервисная архитектура
+- `03-database.mdc` — PostgreSQL, Redis, модели
+- `05-security.mdc` — QR-login, authentication

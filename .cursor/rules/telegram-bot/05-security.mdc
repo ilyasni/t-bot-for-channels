@@ -1,0 +1,511 @@
+---
+title: "Security & Authentication"
+description: "QR Login, шифрование, sessions, безопасность"
+tags: ["security", "authentication", "qr-login", "encryption"]
+version: "3.1"
+---
+
+# Security & Authentication
+
+## 🎯 High-Level Overview
+
+**QR Login система** (v3.1) — авторизация БЕЗ SMS кодов через Telegram Mini App.
+
+**Stack:**
+- Telethon QR Login API
+- Redis для sessions (shared state)
+- Fernet encryption для credentials
+- Master credentials подход
+
+## 🔐 QR Login System (v3.1)
+
+### Архитектура
+
+```
+User (/login CODE)
+    ↓
+Bot создает QR session
+    ↓
+Redis (qr_session:id, TTL 10 мин)
+    ↓
+Mini App показывает QR
+    ↓
+User сканирует QR
+    ↓
+Telethon client.qr_login().wait()
+    ↓
+Authorization finalized
+    ↓
+Session сохранен в shared_auth_manager
+```
+
+### QR Auth Manager
+
+```python
+# qr_auth_manager.py
+import redis
+import json
+import uuid
+from telethon import TelegramClient
+from datetime import datetime, timezone, timedelta
+
+class QRAuthManager:
+    def __init__(self):
+        # Redis для shared state между telethon-bot и telethon
+        self.redis_client = redis.Redis(
+            host=os.getenv("REDIS_HOST", "redis"),
+            port=int(os.getenv("REDIS_PORT", 6379)),
+            decode_responses=True
+        )
+        self.session_ttl = 600  # 10 минут
+    
+    async def create_qr_session(
+        self,
+        telegram_id: int,
+        invite_code: str
+    ) -> Optional[str]:
+        """
+        Создать QR session
+        
+        Returns:
+            session_id для доступа к Mini App
+        """
+        session_id = str(uuid.uuid4())
+        
+        # 1. Создаём Telethon client с master credentials
+        client = TelegramClient(
+            f"sessions/qr_{session_id}",
+            api_id=MASTER_API_ID,
+            api_hash=MASTER_API_HASH
+        )
+        
+        await client.connect()
+        
+        # 2. Вызываем client.qr_login()
+        qr_login = await client.qr_login()
+        
+        # 3. Генерируем deep link
+        token = qr_login.url.split('token=')[1]
+        deep_link = f"tg://login?token={token}"
+        
+        # 4. Сохраняем в Redis с TTL
+        session_data = {
+            "telegram_id": telegram_id,
+            "invite_code": invite_code,
+            "token": token,
+            "deep_link": deep_link,
+            "status": "waiting",
+            "created_at": datetime.now(timezone.utc).isoformat()
+        }
+        
+        self.redis_client.setex(
+            f"qr_session:{session_id}",
+            self.session_ttl,
+            json.dumps(session_data)
+        )
+        
+        # 5. Запускаем background polling
+        asyncio.create_task(
+            self._poll_authorization(session_id, qr_login, client)
+        )
+        
+        return session_id
+    
+    async def _poll_authorization(
+        self,
+        session_id: str,
+        qr_login,
+        client: TelegramClient
+    ):
+        """
+        Polling authorization status
+        """
+        try:
+            # Ждём подтверждения (до 10 минут)
+            await qr_login.wait(timeout=600)
+            
+            # Authorization успешна
+            await self._finalize_authorization(session_id, client)
+            
+        except asyncio.TimeoutError:
+            # Истекло время
+            await self._update_session_status(session_id, "expired")
+        except Exception as e:
+            logger.error(f"Authorization error: {e}")
+            await self._update_session_status(session_id, "error")
+        finally:
+            await client.disconnect()
+    
+    async def _finalize_authorization(
+        self,
+        session_id: str,
+        client: TelegramClient
+    ):
+        """
+        Финализация авторизации
+        """
+        # 1. Проверяем ownership
+        me = await client.get_me()
+        
+        session = await self.get_qr_session(session_id)
+        if not session:
+            return
+        
+        if me.id != session["telegram_id"]:
+            logger.error("Ownership mismatch!")
+            return
+        
+        # 2. Сохраняем session в shared_auth_manager
+        session_string = client.session.save()
+        await shared_auth_manager.save_session(
+            telegram_id=me.id,
+            session_string=session_string
+        )
+        
+        # 3. Обновляем user.is_authenticated = True
+        db = SessionLocal()
+        user = db.query(User).filter(
+            User.telegram_id == me.id
+        ).first()
+        
+        if user:
+            user.is_authenticated = True
+            
+            # 4. Активируем подписку из invite code
+            invite_code = session["invite_code"]
+            await self._activate_subscription(user, invite_code, db)
+            
+            # 5. Устанавливаем max_channels
+            tier = SUBSCRIPTION_TIERS.get(user.subscription_type, {})
+            user.max_channels = tier.get("max_channels", 3)
+            
+            db.commit()
+        
+        db.close()
+        
+        # 6. Обновляем статус в Redis
+        await self._update_session_status(session_id, "authorized")
+```
+
+### Mini App UI
+
+```python
+# main.py (FastAPI endpoint)
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse
+import qrcode
+from io import BytesIO
+import base64
+
+@app.get("/qr-auth", response_class=HTMLResponse)
+async def qr_auth_page(session_id: str):
+    """
+    QR Auth Mini App
+    """
+    # 1. Получаем session из Redis
+    session = await qr_auth_manager.get_qr_session(session_id)
+    
+    if not session:
+        return "<h1>Session expired</h1>"
+    
+    # 2. Генерируем QR код
+    qr = qrcode.QRCode(version=1, box_size=10, border=5)
+    qr.add_data(session["deep_link"])
+    qr.make(fit=True)
+    
+    img = qr.make_image(fill_color="black", back_color="white")
+    
+    # Convert to base64
+    buffer = BytesIO()
+    img.save(buffer, format="PNG")
+    img_str = base64.b64encode(buffer.getvalue()).decode()
+    
+    # 3. HTML с QR + Deep Link кнопка + Polling
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <script src="https://telegram.org/js/telegram-web-app.js"></script>
+        <script src="https://cdn.tailwindcss.com"></script>
+    </head>
+    <body class="bg-gray-100 dark:bg-gray-900">
+        <div class="container mx-auto p-4 text-center">
+            <h1 class="text-2xl font-bold mb-4">📱 QR Авторизация</h1>
+            
+            <!-- QR Code -->
+            <img src="data:image/png;base64,{img_str}" 
+                 class="mx-auto mb-4" 
+                 style="max-width: 300px;">
+            
+            <!-- Deep Link Button -->
+            <button id="loginBtn" 
+                    class="bg-blue-500 text-white px-6 py-3 rounded-lg">
+                Войти через Telegram
+            </button>
+            
+            <!-- Copy Token -->
+            <button id="copyBtn" 
+                    class="mt-2 bg-gray-500 text-white px-4 py-2 rounded">
+                📋 Скопировать токен
+            </button>
+            
+            <p id="status" class="mt-4">⏳ Ожидание авторизации...</p>
+        </div>
+        
+        <script>
+            const tg = window.Telegram.WebApp;
+            tg.ready();
+            tg.expand();
+            
+            const sessionId = "{session_id}";
+            const deepLink = "{session["deep_link"]}";
+            const token = "{session["token"]}";
+            
+            // Deep link button
+            document.getElementById('loginBtn').onclick = () => {{
+                tg.openTelegramLink(deepLink);
+            }};
+            
+            // Copy token button
+            document.getElementById('copyBtn').onclick = () => {{
+                navigator.clipboard.writeText(token);
+                tg.showAlert('✅ Токен скопирован!');
+            }};
+            
+            // Polling status
+            let pollInterval = setInterval(async () => {{
+                const response = await fetch(`/qr-auth-status?session_id=${{sessionId}}`);
+                const data = await response.json();
+                
+                if (data.status === 'authorized') {{
+                    document.getElementById('status').innerHTML = 
+                        '✅ Авторизация успешна!';
+                    clearInterval(pollInterval);
+                    
+                    setTimeout(() => {{
+                        tg.close();
+                    }}, 2000);
+                }} else if (data.status === 'expired') {{
+                    document.getElementById('status').innerHTML = 
+                        '❌ Время истекло. Начните заново.';
+                    clearInterval(pollInterval);
+                }} else if (data.status === 'error') {{
+                    document.getElementById('status').innerHTML = 
+                        '❌ Ошибка авторизации.';
+                    clearInterval(pollInterval);
+                }}
+            }}, 2000);
+            
+            // Visibility change - проверка при возврате
+            document.addEventListener('visibilitychange', async () => {{
+                if (!document.hidden) {{
+                    const response = await fetch(`/qr-auth-status?session_id=${{sessionId}}`);
+                    const data = await response.json();
+                    
+                    if (data.status === 'authorized') {{
+                        tg.showAlert('✅ Авторизация успешна!', () => {{
+                            tg.close();
+                        }});
+                    }}
+                }}
+            }});
+        </script>
+    </body>
+    </html>
+    """
+    
+    return html
+
+@app.get("/qr-auth-status")
+async def qr_auth_status(session_id: str):
+    """
+    Check QR session status
+    """
+    session = await qr_auth_manager.get_qr_session(session_id)
+    
+    if not session:
+        return {"status": "expired"}
+    
+    return {"status": session.get("status", "waiting")}
+```
+
+### Bot Handler
+
+```python
+# bot_login_handlers_qr.py
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ContextTypes, ConversationHandler
+
+WAITING_QR_SCAN = 1
+
+async def login_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /login INVITE_CODE
+    """
+    # 1. Валидация invite code
+    args = context.args
+    if not args:
+        await update.message.reply_text("❌ Укажите инвайт код:\n/login YOUR_CODE")
+        return ConversationHandler.END
+    
+    invite_code = args[0]
+    
+    # Проверка валидности
+    db = SessionLocal()
+    invite = db.query(InviteCode).filter(
+        InviteCode.code == invite_code
+    ).first()
+    
+    if not invite or not invite.is_valid():
+        await update.message.reply_text("❌ Неверный или истекший код")
+        db.close()
+        return ConversationHandler.END
+    
+    db.close()
+    
+    # 2. Создание/получение user
+    telegram_id = update.effective_user.id
+    
+    # 3. Создание QR session
+    session_id = await qr_auth_manager.create_qr_session(
+        telegram_id=telegram_id,
+        invite_code=invite_code
+    )
+    
+    if not session_id:
+        await update.message.reply_text("❌ Ошибка создания сессии")
+        return ConversationHandler.END
+    
+    # 4. Отправка кнопки с WebAppInfo
+    qr_url = f"https://telegram-auth.produman.studio/qr-auth?session_id={session_id}"
+    
+    keyboard = [
+        [InlineKeyboardButton(
+            "📱 Открыть QR-авторизацию",
+            web_app=WebAppInfo(url=qr_url)
+        )]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        "🔐 QR Авторизация\n\n"
+        "1️⃣ Нажмите кнопку ниже\n"
+        "2️⃣ Отсканируйте QR-код или нажмите 'Войти'\n"
+        "3️⃣ Подтвердите в Telegram\n"
+        "4️⃣ Готово!\n\n"
+        "⏱ Время: 10 минут",
+        reply_markup=reply_markup
+    )
+    
+    # 5. Ждём результата
+    context.user_data['qr_session_id'] = session_id
+    
+    return WAITING_QR_SCAN
+```
+
+## 🔒 Encryption
+
+### Credentials Encryption
+
+```python
+# crypto_utils.py
+from cryptography.fernet import Fernet
+import os
+
+# ENCRYPTION_KEY из .env (общий с основным проектом)
+ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY")
+if not ENCRYPTION_KEY:
+    raise ValueError("ENCRYPTION_KEY обязателен!")
+
+cipher = Fernet(ENCRYPTION_KEY.encode())
+
+def encrypt_data(data: str) -> str:
+    """Шифрует данные"""
+    return cipher.encrypt(data.encode()).decode()
+
+def decrypt_data(encrypted: str) -> str:
+    """Расшифровывает данные"""
+    return cipher.decrypt(encrypted.encode()).decode()
+```
+
+### Usage in Models
+
+```python
+# models.py
+class User(Base):
+    # Зашифрованные credentials (НЕ используются в v3.1)
+    # Используются master credentials
+    api_id_encrypted = Column(String, nullable=True)
+    api_hash_encrypted = Column(String, nullable=True)
+    
+    def get_decrypted_api_id(self) -> Optional[int]:
+        if self.api_id_encrypted:
+            return int(decrypt_data(self.api_id_encrypted))
+        return None
+```
+
+## ✅ Verification Steps
+
+1. **Redis доступен для QR sessions:**
+```bash
+docker exec redis redis-cli KEYS "qr_session:*"
+# Должен показать активные sessions
+```
+
+2. **QR Login работает:**
+```python
+# Проверка создания session
+session_id = await qr_auth_manager.create_qr_session(123, "TEST")
+assert session_id is not None
+```
+
+3. **Encryption работает:**
+```python
+encrypted = encrypt_data("test_data")
+decrypted = decrypt_data(encrypted)
+assert decrypted == "test_data"
+```
+
+4. **Mini App доступен:**
+```bash
+curl https://telegram-auth.produman.studio/qr-auth?session_id=test
+# Должен вернуть HTML
+```
+
+5. **Session TTL работает:**
+```bash
+# Session должен истечь через 10 минут
+docker exec redis redis-cli TTL "qr_session:test-id"
+# 600 секунд
+```
+
+## 🚨 Troubleshooting
+
+### QR Login не работает
+
+```bash
+# 1. Проверьте Redis
+docker logs telethon | grep "QRAuthManager"
+# Должно быть: ✅ QRAuthManager подключен
+
+# 2. Проверьте session в Redis
+docker exec redis redis-cli KEYS "qr_session:*"
+
+# 3. Проверьте логи polling
+docker logs telethon | grep "poll_authorization"
+```
+
+### Master credentials
+
+```bash
+# Убедитесь что MASTER_API_ID и MASTER_API_HASH установлены
+docker exec telethon printenv | grep MASTER_
+```
+
+## 📚 Связанные правила
+
+- `01-core.mdc` — Основные правила
+- `03-database.mdc` — Redis, sessions
+- `06-admin.mdc` — Admin sessions

@@ -1,0 +1,257 @@
+---
+title: "Telegram Channel Parser Bot - Main Rules"
+description: "Entry point for Telegram Bot Cursor Rules system"
+version: "3.2.0"
+priority: critical
+autoAttach: true
+scope:
+  - "telethon/**/*.py"
+  - "!telethon/tests/**"
+---
+
+# Telegram Channel Parser Bot - Main Rules
+
+This file serves as the entry point for Telegram Bot Cursor Rules.
+
+## 🎯 Quick Start
+
+The rules are organized into **9 modular files** in `.cursor/rules/telegram-bot/`:
+
+1. **01-core.mdc** (Always loaded) - Critical patterns and project structure
+2. **02-architecture.mdc** - Microservices architecture
+3. **03-database.mdc** - PostgreSQL, Redis, models
+4. **04-development.mdc** - Development workflow
+5. **05-security.mdc** - QR Login, authentication
+6. **06-admin.mdc** - Admin Panel, roles
+7. **07-rag.mdc** - RAG system, vector search
+8. **08-api.mdc** - FastAPI endpoints
+9. **09-external.mdc** - External services integration
+
+## 🔴 Critical Rules (Always Apply)
+
+### 0. ALWAYS Use Context7 Before Development
+
+**MANDATORY:** Before implementing any new feature or modifying existing code:
+
+```bash
+# ✅ CORRECT WORKFLOW:
+# 1. Use Context7 to search for solutions
+Context7: "Telegram Bot API best practices"
+Context7: "FastAPI async patterns"
+Context7: "SQLAlchemy relationships PostgreSQL"
+
+# 2. Study official documentation through Context7
+#    - Find usage examples
+#    - Check current API versions
+#    - Learn best practices
+
+# 3. ONLY THEN write code
+
+# ❌ WRONG:
+# - Start coding without studying documentation
+# - Rely only on memory/assumptions
+# - Use outdated patterns
+```
+
+**Auto-integration hint for AI:**
+```python
+# If uncertain about library usage, automatically query:
+# Context7("library-name best practices")
+# Context7("library-name current API version")
+# Context7("library-name async patterns")
+```
+
+**Examples of mandatory usage:**
+
+```bash
+# Before adding Telegram Mini App
+→ Context7: "Telegram Mini Apps WebAppInfo API"
+→ Context7: "Telegram Bot WebApp dark theme support"
+
+# Before working with FastAPI
+→ Context7: "FastAPI background tasks best practices"
+→ Context7: "FastAPI dependency injection async"
+
+# Before changing SQLAlchemy models
+→ Context7: "SQLAlchemy many-to-many relationships"
+→ Context7: "SQLAlchemy timezone aware datetime"
+
+# Before integrating external API
+→ Context7: "Qdrant Python client async examples"
+→ Context7: "GigaChat embeddings API documentation"
+```
+
+**Consequences:**
+- ❌ WITHOUT Context7: outdated patterns, bugs, suboptimal code
+- ✅ WITH Context7: current best practices, fewer errors, faster development
+
+### 1. PostgreSQL ONLY (NO SQLite!)
+
+```python
+# ✅ Correct
+if "sqlite" in database_url.lower():
+    raise ValueError("SQLite NOT supported!")
+
+# ❌ NEVER use SQLite fallback
+db_url = os.getenv("DB_URL", "sqlite:///fallback.db")  # NO!
+```
+
+### 2. Timezone-Aware DateTime ALWAYS
+
+```python
+from datetime import datetime, timezone
+
+# ✅ Correct
+user.created_at = datetime.now(timezone.utc)
+
+# ❌ Naive datetime - NO!
+user.created_at = datetime.now()
+```
+
+### 3. User ID Filtering REQUIRED
+
+```python
+# ✅ Correct - multi-user isolation
+posts = db.query(Post).filter(Post.user_id == user_id).all()
+
+# ❌ Data leak between users
+posts = db.query(Post).all()
+```
+
+### 4. Redis WITHOUT Password
+
+```python
+# ✅ Correct (Valkey default)
+redis_client = redis.Redis(host='redis', port=6379)
+
+# ❌ Don't specify password
+redis_client = redis.Redis(host='redis', password='...')  # NO!
+```
+
+### 5. Async Everywhere
+
+```python
+# ✅ Correct
+async with httpx.AsyncClient() as client:
+    response = await client.get(url)
+
+# ❌ Blocks event loop
+response = requests.get(url)  # NO!
+```
+
+## 📚 Navigation
+
+**For detailed rules, see:** `.cursor/rules/telegram-bot/README.md`
+
+**By task:**
+- Database work → `03-database.mdc`
+- API development → `08-api.mdc`
+- QR Login → `05-security.mdc`
+- Admin Panel → `06-admin.mdc`
+- RAG/AI → `07-rag.mdc`
+- Testing → `04-development.mdc`
+
+## ✅ Verification Checklist Summary
+
+After generating code, AI should automatically verify:
+
+1. **Context7 used:**
+   - [ ] Documentation studied through Context7
+   - [ ] References to sources in code comments
+   - [ ] Patterns match best practices from documentation
+   - [ ] API versions are current
+
+2. **PostgreSQL only:**
+   - [ ] No SQLite imports or connections
+   - [ ] `grep -r "sqlite" database.py` returns 0 results
+   - [ ] DATABASE_URL contains "postgresql://"
+
+3. **Timezone-aware datetime:**
+   - [ ] All `datetime.now()` → `datetime.now(timezone.utc)`
+   - [ ] All datetime fields have `timezone=True` in SQLAlchemy
+   - [ ] Comparisons check for timezone presence
+
+4. **User filtering:**
+   - [ ] All ORM queries contain `.filter(... user_id == ...)`
+   - [ ] No queries return data for all users
+   - [ ] API endpoints require user_id parameter
+
+5. **Type hints:**
+   - [ ] All functions have type annotations
+   - [ ] Return types specified
+   - [ ] Pydantic models for API schemas
+
+6. **Async patterns:**
+   - [ ] HTTP requests via `httpx.AsyncClient()`
+   - [ ] Database queries via async SQLAlchemy
+   - [ ] No blocking `requests.get()` calls
+
+7. **Redis patterns:**
+   - [ ] All Redis keys have prefixes (`qr_session:`, `admin_session:`, etc.)
+   - [ ] TTL set for all cached data
+   - [ ] `decode_responses=True` in Redis client
+
+8. **Error handling:**
+   - [ ] Try-except blocks for external API calls
+   - [ ] Graceful degradation with fallbacks
+   - [ ] Proper HTTP exception status codes
+
+## 🚨 Consequences of Violation
+
+**Ignoring Context7:**
+- ❌ Using outdated API patterns
+- ❌ Bugs from incorrect library usage
+- ❌ Suboptimal code not following best practices
+- ❌ Time wasted fixing preventable errors
+- ❌ Incompatibility with current versions
+
+**SQLite fallback:**
+- ❌ Production deployment fails
+- ❌ Timezone handling breaks
+- ❌ Concurrent access issues
+
+**Naive datetime:**
+- ❌ Wrong `expires_at` comparisons
+- ❌ PostgreSQL save errors
+- ❌ Incorrect user timezone display
+
+**Missing user_id filter:**
+- ❌ Data leak between users
+- ❌ Critical security vulnerability
+
+**Blocking operations:**
+- ❌ Event loop blocked
+- ❌ API timeouts
+- ❌ Poor performance
+
+## 🔀 Conflict Resolution Priority
+
+When rules from multiple modules conflict:
+
+1. **01-core.mdc** (HIGHEST PRIORITY)
+   - Critical patterns always apply
+   - PostgreSQL, timezone, user filtering
+
+2. **03-database.mdc & 05-security.mdc** (HIGH)
+   - Database rules for data persistence
+   - Security rules for auth logic
+
+3. **07-rag.mdc & 08-api.mdc** (MEDIUM)
+   - Feature-specific implementations
+   - API endpoint patterns
+
+4. **02-architecture.mdc & 04-development.mdc** (LOW)
+   - Architectural guidance
+   - Development workflow
+
+**Resolution strategy:**
+- If core rule conflicts with feature rule → follow core
+- If security conflicts with database → follow security for auth, database for persistence
+- If in doubt → follow higher priority module
+
+---
+
+**See full documentation:** `.cursor/rules/telegram-bot/README.md`  
+**Changelog:** `.cursor/rules/telegram-bot/CHANGELOG.mdc`  
+**Version:** 3.2.0
+

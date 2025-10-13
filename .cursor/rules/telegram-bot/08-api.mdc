@@ -1,0 +1,598 @@
+---
+title: "API Endpoints"
+description: "FastAPI endpoints, структура, authentication, best practices"
+tags: ["api", "fastapi", "endpoints", "rest"]
+version: "3.1"
+---
+
+# API Endpoints
+
+## 🎯 High-Level Overview
+
+**FastAPI сервер** (порт 8010) — REST API для интеграции с n8n, управления данными и Mini Apps.
+
+**Stack:**
+- FastAPI (async)
+- Pydantic (validation)
+- SQLAlchemy (ORM)
+- CORS middleware
+
+## 🚀 FastAPI Application
+
+### Configuration
+
+```python
+# main.py
+from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
+from sqlalchemy.orm import Session
+from typing import Optional, List
+
+app = FastAPI(
+    title="Telegram Channel Parser API",
+    version="3.1.0",
+    docs_url="/docs",
+    redoc_url="/redoc"
+)
+
+# CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # В production - конкретные домены
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Database dependency
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+```
+
+## 📋 API Categories
+
+### 1. Posts Management
+
+```python
+@app.get("/posts")
+async def get_posts(
+    user_id: Optional[int] = None,
+    channel_id: Optional[int] = None,
+    limit: int = 50,
+    offset: int = 0,
+    db: Session = Depends(get_db)
+):
+    """
+    Получить посты с фильтрацией
+    
+    Query Parameters:
+        user_id: ID пользователя (обязательно для безопасности!)
+        channel_id: Фильтр по каналу
+        limit: Макс. постов (default: 50)
+        offset: Смещение (pagination)
+    """
+    # ✅ ВСЕГДА фильтруйте по user_id
+    if not user_id:
+        raise HTTPException(400, "user_id required")
+    
+    query = db.query(Post).join(Post.channel).join(Channel.users).filter(
+        User.id == user_id
+    )
+    
+    if channel_id:
+        query = query.filter(Post.channel_id == channel_id)
+    
+    posts = query.order_by(Post.posted_at.desc()).limit(limit).offset(offset).all()
+    total = query.count()
+    
+    return {
+        "posts": [serialize_post(p) for p in posts],
+        "total": total,
+        "limit": limit,
+        "offset": offset
+    }
+
+@app.get("/posts/{post_id}")
+async def get_post(
+    post_id: int,
+    user_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    Получить конкретный пост
+    """
+    post = db.query(Post).join(Post.channel).join(Channel.users).filter(
+        Post.id == post_id,
+        User.id == user_id
+    ).first()
+    
+    if not post:
+        raise HTTPException(404, "Post not found")
+    
+    return serialize_post(post)
+```
+
+### 2. Channels Management
+
+```python
+@app.get("/channels")
+async def get_channels(
+    user_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    Список каналов пользователя
+    """
+    user = db.query(User).filter(User.id == user_id).first()
+    
+    if not user:
+        raise HTTPException(404, "User not found")
+    
+    return {
+        "channels": [
+            {
+                "id": ch.id,
+                "username": ch.channel_username,
+                "posts_count": len(ch.posts)
+            }
+            for ch in user.channels
+        ]
+    }
+
+@app.post("/channels")
+async def add_channel(
+    user_id: int,
+    channel_username: str,
+    db: Session = Depends(get_db)
+):
+    """
+    Добавить канал
+    """
+    # Проверка лимита
+    user = db.query(User).filter(User.id == user_id).first()
+    
+    if not user:
+        raise HTTPException(404, "User not found")
+    
+    if len(user.channels) >= user.max_channels:
+        raise HTTPException(
+            403,
+            f"Channel limit reached: {user.max_channels}"
+        )
+    
+    # Создание/получение канала
+    channel = db.query(Channel).filter(
+        Channel.channel_username == channel_username
+    ).first()
+    
+    if not channel:
+        channel = Channel(channel_username=channel_username)
+        db.add(channel)
+    
+    # Связь
+    if channel not in user.channels:
+        user.channels.append(channel)
+    
+    db.commit()
+    
+    return {"status": "success", "channel_id": channel.id}
+```
+
+### 3. QR Auth Endpoints
+
+```python
+@app.get("/qr-auth", response_class=HTMLResponse)
+async def qr_auth_page(session_id: str):
+    """
+    QR Auth Mini App
+    """
+    # Получаем session
+    session = await qr_auth_manager.get_qr_session(session_id)
+    
+    if not session:
+        return "<h1>Session expired</h1>"
+    
+    # Генерируем QR код
+    qr_image_base64 = generate_qr_code(session["deep_link"])
+    
+    # HTML с Telegram Mini App integration
+    html = render_qr_auth_template(
+        session_id=session_id,
+        qr_image=qr_image_base64,
+        deep_link=session["deep_link"],
+        token=session["token"]
+    )
+    
+    return html
+
+@app.get("/qr-auth-status")
+async def qr_auth_status(session_id: str):
+    """
+    Проверка статуса QR session
+    """
+    session = await qr_auth_manager.get_qr_session(session_id)
+    
+    if not session:
+        return {"status": "expired"}
+    
+    return {"status": session.get("status", "waiting")}
+```
+
+### 4. Admin Panel Endpoints
+
+```python
+@app.get("/admin-panel", response_class=HTMLResponse)
+async def admin_panel(admin_id: int, token: str):
+    """
+    Admin Panel Mini App (SPA)
+    """
+    # Verify session
+    if not admin_panel_manager.verify_admin_session(token, admin_id):
+        return "<h1>Unauthorized</h1>"
+    
+    # HTML SPA
+    html = render_admin_panel_template(
+        admin_id=admin_id,
+        token=token
+    )
+    
+    return html
+
+@app.get("/api/admin/users")
+@require_admin
+async def get_users_api(
+    admin_id: int,
+    token: str,
+    role: Optional[str] = None,
+    subscription: Optional[str] = None,
+    search: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+    db: Session = Depends(get_db)
+):
+    """
+    Список пользователей (admin only)
+    """
+    query = db.query(User)
+    
+    # Фильтры
+    if role:
+        query = query.filter(User.role == role)
+    
+    if subscription:
+        query = query.filter(User.subscription_type == subscription)
+    
+    if search:
+        query = query.filter(User.username.ilike(f"%{search}%"))
+    
+    users = query.limit(limit).offset(offset).all()
+    total = query.count()
+    
+    return {
+        "users": [serialize_user(u) for u in users],
+        "total": total
+    }
+
+@app.post("/api/admin/user/{user_id}/subscription")
+@require_admin
+async def update_subscription(
+    user_id: int,
+    admin_id: int,
+    token: str,
+    subscription_type: str,
+    duration_days: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """
+    Изменить подписку (admin only)
+    """
+    user = db.query(User).filter(User.id == user_id).first()
+    
+    if not user:
+        raise HTTPException(404, "User not found")
+    
+    # Update subscription
+    old_subscription = user.subscription_type
+    user.subscription_type = subscription_type
+    
+    # Set expiry
+    if duration_days:
+        user.subscription_expires = (
+            datetime.now(timezone.utc) + timedelta(days=duration_days)
+        )
+    
+    # Update max_channels
+    tier = SUBSCRIPTION_TIERS.get(subscription_type, {})
+    user.max_channels = tier.get("max_channels", 3)
+    
+    # Audit log
+    admin = db.query(User).filter(User.telegram_id == admin_id).first()
+    history = SubscriptionHistory(
+        user_id=user.id,
+        action="upgraded",
+        old_type=old_subscription,
+        new_type=subscription_type,
+        changed_by=admin.id,
+        notes="Admin panel change"
+    )
+    db.add(history)
+    
+    db.commit()
+    
+    return {"status": "success", "user": serialize_user(user)}
+```
+
+### 5. Parsing Endpoints
+
+```python
+@app.post("/parse_all_channels")
+async def parse_all_channels(
+    user_id: Optional[int] = None,
+    background_tasks: BackgroundTasks = BackgroundTasks(),
+    db: Session = Depends(get_db)
+):
+    """
+    Запустить парсинг всех каналов (background)
+    """
+    if user_id:
+        # Конкретный пользователь
+        background_tasks.add_task(
+            parser_service.parse_user_channels,
+            user_id
+        )
+    else:
+        # Все пользователи
+        background_tasks.add_task(
+            parser_service.parse_all_users
+        )
+    
+    return {"status": "queued"}
+
+@app.get("/parsing/status/{user_id}")
+async def parsing_status(
+    user_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    Статус парсинга для пользователя
+    """
+    # Получаем последний парсинг
+    last_parse = parser_service.get_last_parse_time(user_id)
+    
+    return {
+        "user_id": user_id,
+        "last_parse": last_parse.isoformat() if last_parse else None,
+        "next_parse": (last_parse + timedelta(minutes=30)).isoformat() if last_parse else None
+    }
+```
+
+### 6. Health Check
+
+```python
+@app.get("/health")
+async def health_check():
+    """
+    Comprehensive health check
+    """
+    checks = {
+        "database": await check_database(),
+        "redis": await check_redis(),
+        "qdrant": await check_qdrant(),
+        "gigachat_proxy": await check_gigachat()
+    }
+    
+    all_healthy = all(checks.values())
+    status = "healthy" if all_healthy else "degraded"
+    
+    return {
+        "status": status,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "checks": checks,
+        "version": "3.1.0"
+    }
+
+async def check_database() -> bool:
+    try:
+        db = SessionLocal()
+        db.execute("SELECT 1")
+        db.close()
+        return True
+    except:
+        return False
+
+async def check_redis() -> bool:
+    try:
+        redis_client.ping()
+        return True
+    except:
+        return False
+```
+
+## 🔐 Security Patterns
+
+### Authentication Decorator
+
+```python
+def require_user_auth(func):
+    """
+    Требует авторизации пользователя
+    """
+    @wraps(func)
+    async def wrapper(*args, **kwargs):
+        user_id = kwargs.get('user_id')
+        
+        if not user_id:
+            raise HTTPException(401, "user_id required")
+        
+        db = SessionLocal()
+        user = db.query(User).filter(User.id == user_id).first()
+        
+        if not user or not user.is_authenticated:
+            db.close()
+            raise HTTPException(401, "User not authenticated")
+        
+        db.close()
+        return await func(*args, **kwargs)
+    
+    return wrapper
+```
+
+### Rate Limiting
+
+```python
+from functools import wraps
+
+def rate_limit(limit: int = 10, window: int = 60):
+    """
+    Rate limiting декоратор
+    
+    Args:
+        limit: Макс. запросов
+        window: Окно в секундах
+    """
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            user_id = kwargs.get('user_id')
+            
+            if not user_id:
+                return await func(*args, **kwargs)
+            
+            # Redis rate limit
+            key = f"rate:{user_id}:{func.__name__}"
+            current = redis_client.incr(key)
+            
+            if current == 1:
+                redis_client.expire(key, window)
+            
+            if current > limit:
+                raise HTTPException(
+                    429,
+                    f"Rate limit exceeded: {limit} requests per {window}s"
+                )
+            
+            return await func(*args, **kwargs)
+        
+        return wrapper
+    
+    return decorator
+
+# Usage
+@app.post("/rag/query")
+@rate_limit(limit=10, window=60)
+async def rag_query_endpoint(user_id: int, query: str):
+    pass
+```
+
+## 📝 Pydantic Models
+
+### Request/Response Schemas
+
+```python
+from pydantic import BaseModel, Field
+from typing import Optional, List
+
+class PostResponse(BaseModel):
+    id: int
+    text: str
+    channel_username: str
+    posted_at: str
+    url: Optional[str]
+    tags: List[str] = []
+    
+    class Config:
+        orm_mode = True
+
+class ChannelCreate(BaseModel):
+    channel_username: str = Field(..., min_length=1)
+
+class UserUpdate(BaseModel):
+    subscription_type: Optional[str] = None
+    max_channels: Optional[int] = Field(None, ge=1, le=999)
+    role: Optional[str] = Field(None, pattern="^(admin|user)$")
+```
+
+## ✅ Verification Steps
+
+1. **API доступен:**
+```bash
+curl http://localhost:8010/health
+# {"status": "healthy"}
+```
+
+2. **Docs генерируются:**
+```bash
+curl http://localhost:8010/docs
+# HTML with Swagger UI
+```
+
+3. **CORS настроен:**
+```bash
+curl -H "Origin: http://example.com" \
+     -H "Access-Control-Request-Method: POST" \
+     -X OPTIONS http://localhost:8010/posts
+# Should return CORS headers
+```
+
+4. **Rate limiting работает:**
+```python
+# 11-й запрос за минуту
+for i in range(11):
+    response = requests.post("/rag/query", json={"user_id": 1, "query": "test"})
+
+assert response.status_code == 429  # Rate limit exceeded
+```
+
+5. **Background tasks работают:**
+```python
+response = requests.post("/parse_all_channels?user_id=1")
+assert response.json()["status"] == "queued"
+```
+
+## 🚨 Error Handling
+
+### Custom Exception Handler
+
+```python
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request, exc):
+    """
+    Улучшенные ошибки валидации
+    """
+    return JSONResponse(
+        status_code=400,
+        content={
+            "detail": "Validation error",
+            "errors": exc.errors()
+        }
+    )
+
+@app.exception_handler(Exception)
+async def general_exception_handler(request, exc):
+    """
+    Общий handler для непредвиденных ошибок
+    """
+    logger.error(f"Unhandled exception: {exc}", exc_info=True)
+    
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": "Internal server error"
+        }
+    )
+```
+
+## 📚 Связанные правила
+
+- `01-core.mdc` — Основные правила
+- `05-security.mdc` — Authentication
+- `06-admin.mdc` — Admin endpoints
+- `07-rag.mdc` — RAG endpoints
