@@ -1,255 +1,421 @@
-# n8n Installer
+# n8n Server with Telegram Channel Parser & RAG System
 
-**n8n Installer** is an open-source Docker Compose template designed to significantly simplify setting up a comprehensive, self-hosted environment for n8n and Flowise. It bundles essential supporting tools like Open WebUI (as an interface for n8n agents), Supabase (database, vector information storage, authentication), Qdrant (high-performance vector information storage), Langfuse (to observe AI model performance), SearXNG (private metasearch), Grafana/Prometheus (monitoring), Crawl4ai (web crawling), and Caddy (for managed HTTPS). Plus, during setup, you can optionally import over 300 community workflows into your n8n instance!
+**Форк проекта [n8n-installer](https://github.com/kossakovsky/n8n-installer) от Cole Medin с расширенной функциональностью.**
 
-### Why This Setup?
+Этот проект представляет собой комплексную self-hosted платформу для AI автоматизации, включающую:
 
-This installer helps you create your own powerful, private AI workshop. Imagine having a suite of tools at your fingertips to:
+- 🤖 **n8n** - low-code платформа автоматизации с 400+ интеграциями
+- 📱 **Telegram Channel Parser** - многопользовательский парсер Telegram каналов с AI тегированием и RAG системой
+- 🧠 **RAG System** - векторный поиск и AI-ответы на основе спарсенных постов
+- 🔍 **Full AI Stack** - Flowise, Open WebUI, Supabase, Qdrant, Langfuse, SearXNG и другие
 
-- Automate repetitive tasks.
-- Build smart assistants tailored to your needs.
-- Analyze information and gain insights.
-- Generate creative content.
+---
 
-This setup provides a comprehensive suite of cutting-edge services, all pre-configured to work together. Key advantages include:
+## 🆕 Дополнительные возможности этого форка
 
-- **Rich Toolset:** Get a curated collection of powerful open-source tools for AI development, automation, and monitoring, all in one place.
-- **Scalable n8n Performance:** n8n runs in `queue` mode by default, leveraging Redis for task management and Postgres for data storage. You can dynamically specify the number of n8n workers during installation, allowing for robust parallel processing of your workflows to handle demanding loads.
-- **Full Control:** All of this is hosted by you, giving you full control over your data, operations, and how resources are allocated.
+### Telegram Channel Parser (telethon)
 
-### What's Included
+Расположение: `/telethon/`
 
-✅ [**Self-hosted n8n**](https://n8n.io/) - A low-code platform with over 400 integrations and advanced AI components to automate workflows.
-✅ **Caddy, Postgres, and Redis** - Core services for web proxy, database, and caching, which are always included.
+**Ключевые функции:**
+- ✅ **Многопользовательский режим** - каждый пользователь с собственными Telegram API ключами
+- ✅ **QR Login** - авторизация через QR код (без SMS кодов!)
+- ✅ **REST API** - интеграция с n8n workflows
+- ✅ **AI Тегирование** - автоматическое тегирование постов (OpenRouter/GigaChat)
+- ✅ **RAG System** - векторный поиск по постам с генерацией ответов
+- ✅ **AI Дайджесты** - персонализированные ежедневные/еженедельные дайджесты
+- ✅ **Обогащение данных** - автоматическое извлечение контента из ссылок (Crawl4AI)
+- ✅ **Система подписок** - роли и лимиты (free, trial, basic, premium, enterprise)
+- ✅ **Admin Panel** - управление пользователями через Telegram Mini App
+- ✅ **Retention System** - автоматическая очистка старых постов
 
-The installer also makes the following powerful open-source tools **available for you to select and deploy** via an interactive wizard during setup:
+**Технологии:**
+- Telethon (Telegram API)
+- FastAPI (REST API)
+- PostgreSQL/Supabase (база данных)
+- Qdrant (векторное хранилище)
+- Redis/Valkey (кеширование)
+- GigaChat/OpenRouter (AI модели)
+- Crawl4AI (web scraping)
+- Docker (контейнеризация)
 
-✅ [**Supabase**](https://supabase.com/) - An open-source alternative to Firebase, providing database storage, user authentication, and more. It's a popular choice for AI applications.
+**Документация:**
+- [Быстрый старт](/telethon/docs/quickstart/QUICK_START.md)
+- [QR Login гайд](/telethon/docs/quickstart/QR_LOGIN_GUIDE.md)
+- [Admin Panel](/telethon/docs/quickstart/ADMIN_PANEL_QUICKSTART.md)
+- [RAG система](/telethon/docs/quickstart/RAG_QUICKSTART.md)
+- [Полная документация](/telethon/docs/README.md)
 
-✅ [**Open WebUI**](https://openwebui.com/) - A user-friendly, ChatGPT-like interface to interact privately with your AI models and n8n agents.
+### GPT2Giga Proxy
 
-✅ [**Flowise**](https://flowiseai.com/) - A no-code/low-code AI agent builder that complements n8n perfectly, allowing you to create sophisticated AI applications with ease.
+Расположение: `/gpt2giga/`
 
-✅ [**Qdrant**](https://qdrant.tech/) - A high-performance open-source vector store, specialized for AI. While Supabase also offers vector capabilities, Qdrant is included for its speed, making it ideal for demanding AI tasks.
+OpenAI-совместимый прокси для GigaChat (Sber AI):
+- ✅ Embeddings генерация (EmbeddingsGigaR)
+- ✅ Chat completions (GigaChat-Lite, GigaChat, GigaChatMAX)
+- ✅ Streaming support
+- ✅ OpenAI SDK совместимость
 
-✅ [**SearXNG**](https://searxng.org/) - A free, open-source internet metasearch engine. It aggregates results from numerous search services without tracking or profiling you, ensuring your privacy.
+---
 
-✅ [**Caddy**](https://caddyserver.com/) - A powerful web server that automatically handles HTTPS/TLS for your custom domains, keeping your connections secure.
+## 📋 Что включено (оригинальный стек)
 
-✅ [**Langfuse**](https://langfuse.com/) - An open-source platform to help you observe and understand how your AI agents are performing, making it easier to debug and improve them.
+### Обязательные компоненты
 
-✅ [**Crawl4ai**](https://github.com/Alfresco/crawl4ai) - A flexible web crawler designed for AI, enabling you to extract data from websites for your projects.
+✅ [**Self-hosted n8n**](https://n8n.io/) - платформа автоматизации с 400+ интеграциями и AI компонентами  
+✅ **Caddy** - reverse proxy с автоматическим HTTPS  
+✅ **PostgreSQL** - основная база данных  
+✅ **Redis/Valkey** - кеширование и очереди задач  
 
-✅ [**Letta**](https://docs.letta.com/) - An open-source agent server and SDK that can be connected to various LLM API backends (OpenAI, Anthropic, Ollama, etc.), enabling you to build and manage AI agents.
+### Опциональные сервисы (выбираются при установке)
 
-✅ [**Weaviate**](https://weaviate.io/) - An open-source AI-native vector database with a focus on scalability and ease of use. It can be used for RAG, hybrid search, and more.
+✅ [**Supabase**](https://supabase.com/) - open-source альтернатива Firebase (БД, auth, vector store)  
+✅ [**Open WebUI**](https://openwebui.com/) - ChatGPT-like интерфейс для AI моделей  
+✅ [**Flowise**](https://flowiseai.com/) - no-code AI agent builder  
+✅ [**Qdrant**](https://qdrant.tech/) - высокопроизводительная векторная БД  
+✅ [**SearXNG**](https://searxng.org/) - приватный метапоисковик  
+✅ [**Langfuse**](https://langfuse.com/) - мониторинг AI агентов  
+✅ [**Crawl4AI**](https://github.com/Alfresco/crawl4ai) - web crawler для AI  
+✅ [**Letta**](https://docs.letta.com/) - AI agent server с долгосрочной памятью  
+✅ [**Weaviate**](https://weaviate.io/) - AI-native векторная БД  
+✅ [**Neo4j**](https://neo4j.com/) - графовая база данных  
+✅ [**Ollama**](https://ollama.com/) - локальные LLM (Llama, Mistral, Gemma)  
+✅ [**Prometheus**](https://prometheus.io/) - система мониторинга  
+✅ [**Grafana**](https://grafana.com/) - визуализация метрик  
 
-✅ [**Neo4j**](https://neo4j.com/) - A graph database management system that allows you to model, store, and query data as a network of nodes and relationships.
+### Community Workflows
 
-✅ [**Ollama**](https://ollama.com/) - Run Llama 3, Mistral, Gemma, and other large language models locally.
+В проект включено **300+ готовых n8n workflows**, покрывающих:
+- 🤖 AI Agents & Chatbots (RAG, LangChain, OpenAI, Claude)
+- 📧 Gmail & Outlook автоматизация
+- 📊 Notion, Airtable, Google Sheets интеграции
+- 📄 PDF, Image, Audio, Video обработка
+- 💬 Telegram, WhatsApp, Discord боты
+- 🌐 WordPress, WooCommerce AI-контент
+- 📱 Социальные сети (LinkedIn, Instagram, Twitter, YouTube)
 
-✅ [**Prometheus**](https://prometheus.io/) - An open-source monitoring and alerting toolkit to keep an eye on system health.
+---
 
-✅ [**Grafana**](https://grafana.com/) - An open-source platform for visualizing monitoring data, helping you understand system performance at a glance.
+## 🚀 Быстрая установка
 
-### Included Community Workflows
+### Предварительные требования
 
-Get started quickly with a vast library of pre-built automations (optional import during setup)! This collection includes over 300 workflows covering a wide range of use cases:
+1. **Домен** - зарегистрированный домен (например, `yourdomain.com`)
+2. **DNS** - настроенная wildcard A-запись: `*.yourdomain.com` → `YOUR_SERVER_IP`
+3. **Сервер** - Ubuntu 24.04 LTS, 64-bit:
+   - **Минимальная конфигурация** (n8n + Flowise): 4GB RAM / 2 CPU / 30GB Disk
+   - **Полная конфигурация** (все сервисы): 8GB RAM / 4 CPU / 60GB Disk
+   - **С Telegram Parser + RAG**: 12GB RAM / 6 CPU / 80GB Disk (рекомендуется)
 
-🚦 **What's inside?**
+### Установка
 
-- **AI Agents & Chatbots:** RAG, LLM, LangChain, Ollama, OpenAI, Claude, Gemini, and more
-- **Gmail & Outlook:** Smart labeling, auto-replies, PDF handling, and email-to-Notion
-- **HR, E-commerce, IT, Security, Research, and more!**
-- **Notion, Airtable, Google Sheets:** Data sync, AI summaries, knowledge bases
-- **PDF, Image, Audio, Video:** Extraction, summarization, captioning, speech-to-text
-- **Slack, Mattermost:** Ticketing, feedback analysis, notifications
-- **Social Media:** LinkedIn, Pinterest, Instagram, Twitter/X, YouTube, TikTok automations
-- **Telegram, WhatsApp, Discord:** Bots, notifications, voice, and image workflows
-- **WordPress, WooCommerce:** AI content, chatbots, auto-tagging
-
-## Installation
-
-### Prerequisites before Installation
-
-1.  **Domain Name:** You need a registered domain name (e.g., `yourdomain.com`).
-2.  **DNS Configuration:** Before running the installation script, you **must** configure DNS A-record for your domain, pointing to the public IP address of the server where you'll install this system. Replace `yourdomain.com` with your actual domain:
-    - **Wildcard Record:** `A *.yourdomain.com` -> `YOUR_SERVER_IP`
-3.  **Server:** Minimum server system requirements: Ubuntu 24.04 LTS, 64-bit.
-    - For running **all available services**: at least **8 GB Memory / 4 CPU Cores / 60 GB Disk Space **.
-    - For a minimal setup with only **n8n and Flowise**: **4 GB Memory / 2 CPU Cores / 30 GB Disk Space**.
-
-### Running the Installer
-
-The recommended way to install is using the provided main installation script.
-
-1.  Connect to your server via SSH.
-2.  Run the following command:
+Подключитесь к серверу через SSH и выполните:
 
     ```bash
-    git clone https://github.com/kossakovsky/n8n-installer && cd n8n-installer && sudo bash ./scripts/install.sh
-    ```
+git clone https://github.com/yourusername/n8n-server && cd n8n-server/n8n-installer
+sudo bash ./scripts/install.sh
+```
 
-This single command automates the entire setup process, including:
+Скрипт установки автоматически:
+- 📦 Подготовит систему (обновления, firewall, базовая защита)
+- 🐳 Установит Docker и Docker Compose
+- 🔐 Сгенерирует `.env` с секретными ключами
+- 🎯 Запустит Service Selection Wizard
+- 🚀 Развернет выбранные сервисы
 
-- Preparing your system (updates, firewall configuration, and basic security enhancements like brute-force protection).
-- Installing Docker and Docker Compose (tools for running applications in isolated environments).
-- Generating a configuration file (`.env`) with necessary secrets and your domain settings.
-- Launching all the services.
+**Вас спросят:**
+1. Основной домен (например, `yourdomain.com`)
+2. Email адрес (для SSL сертификатов и входа в сервисы)
+3. OpenAI API ключ (опционально)
+4. Импортировать ли 300 готовых n8n workflows (опционально, 20-30 минут)
+5. Количество n8n workers (для параллельной обработки)
+6. Какие сервисы развернуть (интерактивный wizard)
 
-During the installation, the script will prompt you for:
+После установки скрипт выведет **summary report** со всеми URL и credentials. **Сохраните его!**
 
-1.  Your **primary domain name** (Required, e.g., `yourdomain.com`). This is the domain for which you've configured the wildcard DNS record.
-2.  Your **email address** (Required, used for service logins like Flowise, Supabase dashboard, Grafana, and for SSL certificate registration with Let's Encrypt).
-3.  An optional **OpenAI API key** (Not required. If provided, it can be used by Supabase AI features and Crawl4ai. Press Enter to skip).
-4.  Whether you want to **import ~300 ready-made n8n community workflows** (y/n, Optional. This can take 20-30 minutes, depending on your server and network speed).
-5.  The **number of n8n workers** you want to run (Required, e.g., 1, 2, 3, 4. This determines how many workflows can be processed in parallel. Defaults to 1 if not specified).
-6.  A **Service Selection Wizard** will then appear, allowing you to choose which of the available services (like Flowise, Supabase, Qdrant, Open WebUI, etc.) you want to deploy. Core services (Caddy, Postgres, Redis) will be set up to support your selections.
+---
 
-Upon successful completion, the script will display a summary report. This report contains the access URLs and credentials for the deployed services. **Save this information in a safe place!**
+## 🔧 Доступ к сервисам
 
-## ⚡️ Quick Start and Usage
+После установки сервисы доступны по адресам (замените `yourdomain.com` на ваш домен):
 
-After successful installation, your services are up and running! Here's how to get started:
+### Основные сервисы
+- **n8n:** `n8n.yourdomain.com`
+- **Telegram Parser API:** `telegram-api.yourdomain.com` (если настроен)
+- **Telegram Auth:** `telegram-auth.yourdomain.com` (QR login)
 
-1.  **Access Your Services:**
-    The installation script provided a summary report with all access URLs and credentials. Please refer to that report. The main services will be available at the following addresses (replace `yourdomain.com` with your actual domain):
-
-    - **n8n:** `n8n.yourdomain.com` (Log in with the email address you provided during installation and the initial password from the summary report. You may be prompted to change this password on first login.)
+### AI Stack
     - **Open WebUI:** `webui.yourdomain.com`
-    - **Flowise:** `flowise.yourdomain.com` (Log in with the email address you provided during installation and the initial password from the summary report.)
-    - **Supabase (Dashboard):** `supabase.yourdomain.com`
+- **Flowise:** `flowise.yourdomain.com`
     - **Langfuse:** `langfuse.yourdomain.com`
-    - **Letta:** `letta.yourdomain.com`
-    - **Weaviate:** `weaviate.yourdomain.com`
+
+### Базы данных
+- **Supabase Dashboard:** `supabase.yourdomain.com`
+- **Qdrant:** `qdrant.yourdomain.com`
     - **Neo4j:** `neo4j.yourdomain.com`
+
+### Мониторинг
     - **Grafana:** `grafana.yourdomain.com`
+- **Prometheus:** `prometheus.yourdomain.com`
+
+### Утилиты
     - **SearXNG:** `searxng.yourdomain.com`
-    - **Prometheus:** `prometheus.yourdomain.com` (Typically used as a data source for Grafana)
 
-2.  **Explore n8n:**
+**Credentials** для всех сервисов указаны в summary report после установки.
 
-    - Log in to your n8n instance. This is your central hub for workflow automation.
-    - If you chose to import the community workflows during installation, you'll find over 300 examples in your "Workflows" section. These are a great way to learn and get ideas.
-    - Start building your first workflow! You have access to over 400 integrations and powerful AI tools.
+---
 
-3.  **Utilize Integrated AI Tools:**
+## 📱 Telegram Channel Parser - Быстрый старт
 
-    - **Connect n8n with Vector Stores:** Use n8n to connect to Qdrant (accessible via its own endpoint if needed, typically `qdrant.yourdomain.com`), Supabase, or Weaviate (`weaviate.yourdomain.com`) to store and retrieve information for your AI tasks like Retrieval Augmented Generation (RAG).
-    - **Build with Flowise:** Access Flowise at `flowise.yourdomain.com` to create AI agents and applications. You can trigger Flowise agents from n8n or vice-versa.
-    - **Interact with Open WebUI:** Use Open WebUI at `webui.yourdomain.com` as a chat interface for your local AI models or n8n agents (e.g., using the n8n_pipe integration if configured).
-    - **Configure LLMs:** If you wish to use large language models (LLMs) from providers like OpenAI, Anthropic, or locally via Ollama (if installed), you can easily configure credentials and connections within n8n nodes or in services like Flowise and Open WebUI.
+### 1. Получение Telegram API ключей
 
-4.  **Check Monitoring (Optional):**
-    - Visit Grafana (`grafana.yourdomain.com`) to see dashboards monitoring your system's performance (data sourced from Prometheus).
+1. Перейдите на https://my.telegram.org
+2. Войдите с вашим номером телефона
+3. Выберите "API development tools"
+4. Создайте приложение и получите `api_id` и `api_hash`
 
-### Using Pre-installed Libraries in n8n's Custom JavaScript
+### 2. Получение invite code
 
-This setup pre-installs useful Node.js libraries for use in n8n's Code nodes, allowing you to write custom JavaScript snippets with enhanced capabilities:
+Попросите администратора создать invite code через Admin Panel (`/admin` команда бота).
 
-- **`cheerio`**: For parsing and manipulating HTML/XML (e.g., web scraping).
-- **`axios`**: A promise-based HTTP client for making requests to external APIs.
-- **`moment`**: For parsing, validating, manipulating, and displaying dates/times.
-- **`lodash`**: A utility library for common programming tasks (arrays, objects, strings, etc.).
+### 3. Авторизация через QR код
 
-## Upgrading
+```
+1. Отправьте боту: /login YOUR_INVITE_CODE
+2. Нажмите кнопку "🔐 QR Авторизация"
+3. Отсканируйте QR код камерой или используйте ссылку
+4. Подтвердите вход в официальном Telegram
+5. Готово! ✅
+```
 
-To update all components (n8n, Open WebUI, etc.) to their latest versions and incorporate the newest changes from this installer project, use the update script from the project root:
+### 4. Добавление каналов
+
+```
+/add_channel @channelname
+/my_channels
+```
+
+### 5. RAG команды
+
+```
+/ask Расскажи о последних новостях AI
+/search Ищу информацию про GPT-4
+/recommend - Персональные рекомендации
+/digest - Настроить AI-дайджесты
+```
+
+**Подробнее:** [Telegram Parser документация](/telethon/docs/README.md)
+
+---
+
+## 🔄 Обновление системы
+
+Для обновления всех компонентов до последних версий:
 
 ```bash
+cd /path/to/n8n-installer
 sudo bash ./scripts/update.sh
 ```
 
-This script will:
+Скрипт обновления:
+1. Получит последние изменения из Git репозитория
+2. Остановит сервисы
+3. Скачает новые Docker образы
+4. Предложит обновить n8n workflows
+5. Перезапустит сервисы
 
-1.  Fetch the latest updates for the installer from the Git repository.
-2.  Temporarily stop the currently running services.
-3.  Download the latest versions of the Docker images for all services.
-4.  Ask if you want to re-run the n8n workflow import (useful if you skipped this during the initial installation or want to refresh the community workflows).
-5.  Restart all services with the new updates.
+---
 
-## Important Links
+## 🛠️ Управление сервисами
 
-- Based on a project by [coleam00](https://github.com/coleam00/local-ai-packaged)
-- [Original Starter Kit](https://github.com/n8n-io/self-hosted-ai-starter-kit) by the n8n team
-- [Community forum](https://thinktank.ottomator.ai/c/local-ai/18) over in the oTTomator Think Tank for discussions and support.
-- [GitHub Kanban board](https://github.com/users/coleam00/projects/2/views/1) for tracking new features and bug fixes.
-- Download an N8N + OpenWebUI integration [directly on the Open WebUI site.](https://openwebui.com/f/coleam/n8n_pipe/) (More instructions may be available on that page).
+### Запуск/остановка
 
-## Troubleshooting
+```bash
+# Запустить все сервисы
+python3 start_services.py
 
-Here are solutions to common issues you might encounter:
+# Остановить все
+docker compose -p localai down
 
-### Temporary "Dangerous Site" Warning in Browser
+# Перезапустить конкретный сервис
+docker compose -p localai restart telethon
+docker compose -p localai restart n8n
+```
 
-- **Symptom:** Immediately after deploying the services, your browser (e.g., Chrome) might display a "Dangerous Site" or similar security warning when you try to access your services. This warning typically disappears after some time (e.g., within a few hours or by the next day).
-- **Cause:** This can happen for a couple of reasons:
-  1.  **Brief use of a self-signed certificate:** When Caddy (the web server managing your SSL certificates) starts up for a new domain, it might briefly use a temporary, self-signed certificate while it's in the process of requesting and obtaining a valid SSL certificate from Let's Encrypt.
-  2.  **Delay in applying the new certificate:** There might also be a short delay before the newly obtained certificate from Let's Encrypt is fully applied and recognized by all systems.
-- **Solution:** This is usually a temporary issue and resolves itself. Give it some time. If the warning persists for more than 24 hours, check your Caddy logs for any errors related to certificate acquisition and ensure your DNS settings are correctly pointing your domain to the server's IP address. You can also try clearing your browser's cache or using an incognito/private window to re-check.
+### Логи
 
-### Supabase Issues
+```bash
+# Логи всех сервисов
+docker compose -p localai logs -f
 
-- **Supabase Pooler Restarting:** If the `supabase-pooler` component keeps restarting, follow the instructions in [this GitHub issue](https://github.com/supabase/supabase/issues/30210#issuecomment-2456955578).
-- **Supabase Analytics Startup Failure:** If the `supabase-analytics` component fails to start after changing your Postgres password, you might need to reset its data. **Warning: This will delete your Supabase database data. Proceed with extreme caution and ensure you have backups if needed.** The technical step involves deleting the `supabase/docker/volumes/db/data` folder.
-- **Supabase Service Unavailable:** Ensure your Postgres database password does not contain special characters like "@". Other special characters might also cause issues. If services like n8n report they cannot connect to Supabase, and other diagnostics seem fine, this is a common cause.
+# Логи конкретного сервиса
+docker logs -f telethon
+docker logs -f n8n
+docker logs -f rag-service
+```
 
-### General Issues
+### Telegram Parser - разработка
 
-- **VPN Conflicts:** Using a VPN might interfere with downloading Docker images. If you encounter issues pulling images, try temporarily disabling your VPN.
-- **Server Requirements:** If you experience unexpected issues, ensure your server meets the minimum hardware and operating system requirements (including version) as specified in the "Prerequisites before Installation" section.
+```bash
+cd telethon
 
-## 👓 Recommended Reading
+# Docker разработка
+./scripts/utils/dev.sh rebuild  # Пересборка + restart
+./scripts/utils/dev.sh logs     # Просмотр логов
+./scripts/utils/dev.sh shell    # Bash в контейнере
 
-n8n offers excellent resources for getting started with its AI capabilities:
+# Локальная разработка (без Docker)
+./scripts/utils/dev.sh setup    # Настройка venv
+./scripts/utils/dev.sh local    # Запуск локально
+./scripts/utils/dev.sh test     # Тесты
+```
 
-- [AI agents for developers: from theory to practice with n8n](https://blog.n8n.io/ai-agents/)
-- [Tutorial: Build an AI workflow in n8n](https://docs.n8n.io/advanced-ai/intro-tutorial/)
-- [Langchain Concepts in n8n](https://docs.n8n.io/advanced-ai/langchain/langchain-n8n/) (Langchain is a framework n8n uses for some AI features)
-- [Demonstration of key differences between agents and chains](https://docs.n8n.io/advanced-ai/examples/agent-chain-comparison/)
-- [What are vector databases?](https://docs.n8n.io/advanced-ai/examples/understand-vector-databases/) (Explains tools like Supabase and Qdrant in more detail)
+---
 
-## 🎥 Video Walkthrough
+## 💡 Советы и трюки
 
-- [Cole's Guide to the AI Starter Kit](https://youtu.be/pOsO40HSbOo) (Provides a visual guide to a similar setup)
+### Shared folder для n8n
 
-## 🛍️ More AI Templates
+Папка `shared/` в корне проекта доступна из n8n workflows по пути `/data/shared`.
 
-For more AI workflow ideas, visit the [**official n8n AI template gallery**](https://n8n.io/workflows/?categories=AI). From each workflow, select the **Use workflow** button to automatically import it into your n8n instance.
-
-### Learn AI Key Concepts (Examples from n8n.io)
-
-- [AI Agent Chat](https://n8n.io/workflows/1954-ai-agent-chat/)
-- [AI chat with any data source (using the n8n workflow tool)](https://n8n.io/workflows/2026-ai-chat-with-any-data-source-using-the-n8n-workflow-tool/)
-- [Chat with OpenAI Assistant (by adding a memory)](https://n8n.io/workflows/2098-chat-with-openai-assistant-by-adding-a-memory/)
-- [Use an open-source LLM (via HuggingFace)](https://n8n.io/workflows/1980-use-an-open-source-llm-via-huggingface/)
-- [Chat with PDF docs using AI (quoting sources)](https://n8n.io/workflows/2165-chat-with-pdf-docs-using-ai-quoting-sources/)
-- [AI agent that can scrape webpages](https://n8n.io/workflows/2006-ai-agent-that-can-scrape-webpages/)
-
-### AI Templates (Examples from n8n.io)
-
-- [Tax Code Assistant](https://n8n.io/workflows/2341-build-a-tax-code-assistant-with-qdrant-mistralai-and-openai/)
-- [Breakdown Documents into Study Notes with MistralAI and Qdrant](https://n8n.io/workflows/2339-breakdown-documents-into-study-notes-using-templating-mistralai-and-qdrant/)
-- [Financial Documents Assistant using Qdrant and MistralAI](https://n8n.io/workflows/2335-build-a-financial-documents-assistant-using-qdrant-and-mistralai/)
-- [Recipe Recommendations with Qdrant and Mistral](https://n8n.io/workflows/2333-recipe-recommendations-with-qdrant-and-mistral/)
-
-## Tips & Tricks
-
-### Accessing Files on the Server
-
-The installer creates a `shared` folder (by default, located in the same directory where you ran the installation script). This folder is accessible by the n8n application.
-When you build automations in n8n that need to read or write files on your server, use the path `/data/shared` inside your n8n workflows. This path in n8n points to the `shared` folder on your server.
-
-**n8n components that interact with the server's filesystem:**
-
+**Полезные n8n ноды:**
 - [Read/Write Files from Disk](https://docs.n8n.io/integrations/builtin/core-nodes/n8n-nodes-base.filesreadwrite/)
-- [Local File Trigger](https://docs.n8n.io/integrations/builtin/core-nodes/n8n-nodes-base.localfiletrigger/) (To start workflows when files change)
-- [Execute Command](https://docs.n8n.io/integrations/builtin/core-nodes/n8n-nodes-base.executecommand/) (To run command-line tools)
+- [Local File Trigger](https://docs.n8n.io/integrations/builtin/core-nodes/n8n-nodes-base.localfiletrigger/)
+- [Execute Command](https://docs.n8n.io/integrations/builtin/core-nodes/n8n-nodes-base.executecommand/)
 
-## 🙌 Contributors
+### Pre-installed libraries в n8n
 
-Want to see who has contributed to this project? Check out the [**GitHub Contributors Page**](https://github.com/kossakovsky/n8n-installer/graphs/contributors)!
+Доступны в Code ноде:
+- `cheerio` - парсинг HTML/XML
+- `axios` - HTTP requests
+- `moment` - работа с датами
+- `lodash` - утилиты для массивов/объектов
+
+### Telegram Parser - Интеграция с n8n
+
+1. Создайте webhook в n8n
+2. Добавьте URL в переменную окружения:
+   ```bash
+   WEBHOOK_NEW_POST=https://n8n.yourdomain.com/webhook/new-post
+   ```
+3. Telegram Parser будет отправлять события:
+   - `new_post` - новый пост добавлен
+   - `post_tagged` - пост получил AI-теги
+   - `post_indexed` - пост индексирован в RAG
+   - `digest_sent` - дайджест отправлен
+
+---
+
+## 🐛 Troubleshooting
+
+### Общие проблемы
+
+**"Dangerous Site" warning в браузере:**
+- Подождите несколько часов, пока Caddy получит Let's Encrypt сертификаты
+- Проверьте DNS настройки (wildcard A-запись)
+
+**VPN конфликты:**
+- Отключите VPN при загрузке Docker образов
+
+**Supabase проблемы:**
+- Избегайте спецсимволов (@, %) в `POSTGRES_PASSWORD`
+- Проверьте логи: `docker logs supabase-db`
+
+### Telegram Parser
+
+**QR Login не работает:**
+```bash
+# Проверить Redis
+docker logs redis
+
+# Проверить session в Redis
+docker exec redis redis-cli KEYS "qr_session:*"
+
+# Проверить логи
+docker logs telethon | grep "QRAuthManager"
+```
+
+**RAG не индексирует посты:**
+```bash
+# Проверить Qdrant
+curl http://qdrant:6333/collections
+
+# Проверить RAG сервис
+docker logs rag-service
+
+# Проверить статус индексации
+curl http://telegram-api.yourdomain.com/api/rag/index/status/USER_ID
+```
+
+**Подробнее:** [Telegram Parser Troubleshooting](/telethon/docs/troubleshooting/)
+
+---
+
+## 📚 Полезные ресурсы
+
+### n8n Обучение
+- [AI agents: from theory to practice](https://blog.n8n.io/ai-agents/)
+- [Build an AI workflow tutorial](https://docs.n8n.io/advanced-ai/intro-tutorial/)
+- [Langchain in n8n](https://docs.n8n.io/advanced-ai/langchain/langchain-n8n/)
+- [Vector databases explained](https://docs.n8n.io/advanced-ai/examples/understand-vector-databases/)
+
+### Telegram Parser
+- [Telegram API Documentation](https://core.telegram.org/api)
+- [Telethon Documentation](https://docs.telethon.dev/)
+- [FastAPI Documentation](https://fastapi.tiangolo.com/)
+
+### Видео
+- [Cole's Guide to the AI Starter Kit](https://youtu.be/pOsO40HSbOo)
+
+### Шаблоны n8n
+- [Official n8n AI templates](https://n8n.io/workflows/?categories=AI)
+
+---
+
+## 🔗 Важные ссылки
+
+- **Оригинальный проект:** [n8n-installer by Cole Medin](https://github.com/kossakovsky/n8n-installer)
+- **Upstream:** [n8n Self-Hosted AI Starter Kit](https://github.com/n8n-io/self-hosted-ai-starter-kit)
+- **Community форум:** [oTTomator Think Tank](https://thinktank.ottomator.ai/c/local-ai/18)
+- **GitHub Kanban:** [Project Board](https://github.com/users/coleam00/projects/2/views/1)
+
+---
+
+## 🤝 Contributors
+
+**Оригинальный проект:**
+- [Contributors to n8n-installer](https://github.com/kossakovsky/n8n-installer/graphs/contributors)
+
+**Этот форк:**
+- Telegram Channel Parser + RAG System: [ваше имя/контакты]
+- GPT2Giga Proxy integration
+- Admin Panel UI/UX improvements
+- QR Login implementation
+
+---
 
 ## 📜 License
 
-This project (originally created by the n8n team, with further development by contributors - see "Important Links") is licensed under the Apache License 2.0. See the [LICENSE](LICENSE) file for details.
+Этот проект (основанный на n8n-installer от Cole Medin и contributors) распространяется под лицензией Apache License 2.0. 
+
+См. [LICENSE](LICENSE) для деталей.
+
+**Дополнительные компоненты (Telegram Parser):**
+- Разработаны как расширение оригинального проекта
+- Также распространяются под Apache License 2.0
+- Copyright для новых компонентов: 2025 [ваше имя]
+
+---
+
+## 🙏 Благодарности
+
+- **Cole Medin** и команда за оригинальный n8n-installer
+- **n8n.io** за платформу автоматизации
+- **Supabase**, **Qdrant**, **Flowise** и другие open-source проекты
+- **Telegram** за API и возможности ботов
+- **Sber AI** за GigaChat API
+
+---
+
+**Версия:** 3.1  
+**Дата:** Октябрь 2025
