@@ -1,0 +1,38 @@
+FROM python:3.9-slim
+
+# Установка системных зависимостей
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
+
+# Создание рабочей директории
+WORKDIR /app
+
+# Копирование файлов зависимостей
+COPY requirements.txt .
+COPY requirements-test.txt .
+
+# Установка Python зависимостей (основные + тестовые)
+RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements-test.txt
+
+# Копирование исходного кода
+COPY . .
+
+# Создание необходимых директорий
+RUN mkdir -p sessions logs data tests
+
+# Переменные окружения для тестов
+ENV PYTHONPATH=/app:/app/rag_service
+ENV TELEGRAM_DATABASE_URL=postgresql://postgres:postgres@postgres-test:5432/test_telegram
+ENV BOT_TOKEN=test_bot_token
+ENV MASTER_API_ID=12345678
+ENV MASTER_API_HASH=test_api_hash
+ENV ENCRYPTION_KEY=WX7wmC8298QkVh1acJr0h8roQ16M4am8qh1h4q35BqQ=
+ENV REDIS_HOST=redis-test
+ENV REDIS_PORT=6379
+
+# Команда по умолчанию - запуск unit тестов
+CMD ["pytest", "tests/", "-m", "unit", "-v", "--tb=short"]
+

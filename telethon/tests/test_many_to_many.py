@@ -9,13 +9,13 @@
 4. Автоматическое удаление каналов без подписчиков
 """
 
+import pytest
 import sys
 import os
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from database import SessionLocal
 from models import User, Channel, Post
 import logging
 
@@ -26,13 +26,14 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def test_channel_creation():
+@pytest.mark.unit
+@pytest.mark.unit
+def test_channel_creation(db):
     """Тест создания каналов"""
     logger.info("\n" + "="*60)
     logger.info("ТЕСТ 1: Создание уникальных каналов")
     logger.info("="*60)
     
-    db = SessionLocal()
     try:
         # Создаем первый канал
         channel1 = Channel.get_or_create(db, "test_channel", 12345, "Test Channel")
@@ -60,17 +61,16 @@ def test_channel_creation():
         logger.error(f"❌ Ошибка теста: {str(e)}")
         db.rollback()
         raise
-    finally:
-        db.close()
 
 
-def test_user_subscriptions():
+@pytest.mark.unit
+@pytest.mark.unit
+def test_user_subscriptions(db):
     """Тест подписок пользователей"""
     logger.info("\n" + "="*60)
     logger.info("ТЕСТ 2: Подписки нескольких пользователей на один канал")
     logger.info("="*60)
     
-    db = SessionLocal()
     try:
         # Создаем тестовых пользователей
         user1 = db.query(User).filter(User.telegram_id == 999001).first()
@@ -146,17 +146,22 @@ def test_user_subscriptions():
         logger.error(f"❌ Ошибка теста: {str(e)}")
         db.rollback()
         raise
-    finally:
-        db.close()
+    except Exception as e:
+        logger.error(f"❌ Ошибка: {e}")
+        db.rollback()
+        raise
 
 
-def test_subscription_removal():
+# finally удален - db управляется pytest fixture
+
+
+@pytest.mark.unit
+def test_subscription_removal(db):
     """Тест удаления подписок"""
     logger.info("\n" + "="*60)
     logger.info("ТЕСТ 3: Удаление подписок")
     logger.info("="*60)
     
-    db = SessionLocal()
     try:
         # Получаем данные из предыдущего теста
         channel = db.query(Channel).filter(
@@ -212,17 +217,22 @@ def test_subscription_removal():
         logger.error(f"❌ Ошибка теста: {str(e)}")
         db.rollback()
         raise
-    finally:
-        db.close()
+    except Exception as e:
+        logger.error(f"❌ Ошибка: {e}")
+        db.rollback()
+        raise
 
 
-def test_subscription_update():
+# finally удален - db управляется pytest fixture
+
+
+@pytest.mark.unit
+def test_subscription_update(db):
     """Тест обновления параметров подписки"""
     logger.info("\n" + "="*60)
     logger.info("ТЕСТ 4: Обновление параметров подписки")
     logger.info("="*60)
     
-    db = SessionLocal()
     try:
         # Создаем тестовые данные
         user = db.query(User).filter(User.telegram_id == 999003).first()
@@ -280,17 +290,22 @@ def test_subscription_update():
         logger.error(f"❌ Ошибка теста: {str(e)}")
         db.rollback()
         raise
-    finally:
-        db.close()
+    except Exception as e:
+        logger.error(f"❌ Ошибка: {e}")
+        db.rollback()
+        raise
 
 
-def test_user_methods():
+# finally удален - db управляется pytest fixture
+
+
+@pytest.mark.unit
+def test_user_methods(db):
     """Тест методов пользователя для работы с каналами"""
     logger.info("\n" + "="*60)
     logger.info("ТЕСТ 5: Методы User для работы с каналами")
     logger.info("="*60)
     
-    db = SessionLocal()
     try:
         # Создаем пользователя
         user = db.query(User).filter(User.telegram_id == 999004).first()
@@ -346,8 +361,13 @@ def test_user_methods():
         logger.error(f"❌ Ошибка теста: {str(e)}")
         db.rollback()
         raise
-    finally:
-        db.close()
+    except Exception as e:
+        logger.error(f"❌ Ошибка: {e}")
+        db.rollback()
+        raise
+
+
+# finally удален - db управляется pytest fixture
 
 
 def cleanup_test_data():
@@ -356,7 +376,6 @@ def cleanup_test_data():
     logger.info("ОЧИСТКА: Удаление тестовых данных")
     logger.info("="*60)
     
-    db = SessionLocal()
     try:
         # Удаляем тестовых пользователей
         test_users = db.query(User).filter(
@@ -390,8 +409,13 @@ def cleanup_test_data():
     except Exception as e:
         logger.error(f"❌ Ошибка очистки: {str(e)}")
         db.rollback()
-    finally:
-        db.close()
+    except Exception as e:
+        logger.error(f"❌ Ошибка: {e}")
+        db.rollback()
+        raise
+
+
+# finally удален - db управляется pytest fixture
 
 
 def main():

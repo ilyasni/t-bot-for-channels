@@ -21,6 +21,14 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
+# КРИТИЧНО: Глобальный parser_service из главного event loop
+# Будет установлен при запуске системы (run_system.py)
+global_parser_service = None
+
+# КРИТИЧНО: Ссылка на главный event loop где работают Telethon клиенты
+# API работает в отдельном потоке (uvicorn), поэтому нужно отправлять задачи в главный loop
+main_event_loop = None
+
 # Локальная таймзона для конвертации datetime
 LOCAL_TZ_NAME = os.getenv('TZ', 'Europe/Moscow')
 try:
@@ -124,7 +132,14 @@ async def logout_user_endpoint(user_id: int, db: Session = Depends(get_db)):
 
 @app.post("/users/{user_id}/channels/parse")
 async def parse_user_channels_endpoint(user_id: int, db: Session = Depends(get_db)):
-    """Парсить каналы конкретного пользователя"""
+    """
+    Парсить каналы конкретного пользователя
+    
+    КРИТИЧНО (Context7 best practices):
+    - API работает в uvicorn потоке (отдельный event loop)
+    - Telethon клиенты живут в главном event loop (run_system)
+    - Используем asyncio.run_coroutine_threadsafe() для отправки задачи в главный loop
+    """
     try:
         user = db.query(User).filter(User.id == user_id).first()
         if not user:
@@ -133,8 +148,19 @@ async def parse_user_channels_endpoint(user_id: int, db: Session = Depends(get_d
         if not user.is_authenticated:
             raise HTTPException(403, "Пользователь не аутентифицирован")
         
-        parser_service = ParserService()
-        result = await parser_service.parse_user_channels_by_id(user_id)
+        # КРИТИЧНО: Проверяем что главный loop установлен
+        if main_event_loop is None or global_parser_service is None:
+            raise HTTPException(503, "ParserService не инициализирован")
+        
+        # КРИТИЧНО: Отправляем задачу в ГЛАВНЫЙ event loop через run_coroutine_threadsafe
+        # Это позволяет вызвать async код из uvicorn потока в loop где живут Telethon клиенты
+        future = asyncio.run_coroutine_threadsafe(
+            global_parser_service.parse_user_channels_by_id(user_id),
+            main_event_loop
+        )
+        
+        # Ждем результат (blocking, но это OK для API эндпоинта)
+        result = future.result(timeout=300)  # 5 минут timeout
         
         if "error" in result:
             raise HTTPException(500, result["error"])
@@ -284,10 +310,24 @@ async def get_user_posts(
 
 @app.post("/parse_all_channels")
 async def parse_all_channels_endpoint(db: Session = Depends(get_db)):
-    """Парсить все активные каналы всех аутентифицированных пользователей"""
+    """
+    Парсить все активные каналы всех аутентифицированных пользователей
+    
+    КРИТИЧНО: Отправляет задачу в главный event loop через run_coroutine_threadsafe
+    """
     try:
-        parser_service = ParserService()
-        await parser_service.parse_all_channels()
+        # КРИТИЧНО: Проверяем что главный loop установлен
+        if main_event_loop is None or global_parser_service is None:
+            raise HTTPException(503, "ParserService не инициализирован")
+        
+        # КРИТИЧНО: Отправляем задачу в ГЛАВНЫЙ event loop
+        future = asyncio.run_coroutine_threadsafe(
+            global_parser_service.parse_all_channels(),
+            main_event_loop
+        )
+        
+        # Запускаем в фоне, не ждем результата
+        # (parse_all_channels может работать долго)
         
         return {
             "status": "success",

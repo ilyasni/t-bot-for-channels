@@ -1,11 +1,4 @@
 """
-RAG Service для Telegram Channel Parser
-
-Микросервис для:
-- Векторного поиска по постам
-- Генерации ответов на вопросы (RAG)
-- Создания дайджестов
+RAG Service Package
+Векторный поиск и генерация ответов для Telegram Channel Parser
 """
-
-__version__ = "0.1.0"
-

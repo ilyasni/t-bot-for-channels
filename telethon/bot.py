@@ -30,6 +30,7 @@ from bot_debug_commands import (
 )
 from voice_transcription_service import voice_transcription_service
 from subscription_config import SUBSCRIPTION_TIERS
+from telegram_formatter import markdownify
 
 logging.basicConfig(
     level=logging.INFO,
@@ -400,7 +401,10 @@ class TelegramBot:
             await update.message.reply_text(welcome_text)
             
         except Exception as e:
-            await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+            await update.message.reply_text(
+                markdownify(f"❌ Ошибка: {str(e)}"),
+                parse_mode='HTML'
+            )
         finally:
             db.close()
     
@@ -412,7 +416,10 @@ class TelegramBot:
         try:
             db_user = db.query(User).filter(User.telegram_id == user.id).first()
             if not db_user:
-                await update.message.reply_text("❌ Пользователь не найден. Используйте /start")
+                await update.message.reply_text(
+                    markdownify("❌ Пользователь не найден. Используйте /start"),
+                    parse_mode='HTML'
+                )
                 return
             
             if db_user.is_authenticated:
@@ -439,7 +446,10 @@ class TelegramBot:
             # Получаем URL для аутентификации
             auth_url = await get_auth_url(session_id)
             if not auth_url:
-                await update.message.reply_text("❌ Ошибка создания ссылки для аутентификации")
+                await update.message.reply_text(
+                    markdownify("❌ Ошибка создания ссылки для аутентификации"),
+                    parse_mode='HTML'
+                )
                 return
             
             # Создаем кнопку с ссылкой
@@ -457,11 +467,14 @@ class TelegramBot:
                 "4. Введите код в веб-форме\n\n"
                 "🔗 Ссылка действительна 10 минут",
                 reply_markup=reply_markup,
-                parse_mode='Markdown'
+                parse_mode='HTML'
             )
             
         except Exception as e:
-            await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+            await update.message.reply_text(
+                markdownify(f"❌ Ошибка: {str(e)}"),
+                parse_mode='HTML'
+            )
         finally:
             db.close()
     
@@ -475,7 +488,7 @@ class TelegramBot:
             "2. Откройте защищенную веб-форму\n"
             "3. Введите код там\n\n"
             "🔐 Веб-форма использует HTTPS шифрование",
-            parse_mode='Markdown'
+            parse_mode='HTML'
         )
     
     async def auth_status_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -486,7 +499,10 @@ class TelegramBot:
         try:
             db_user = db.query(User).filter(User.telegram_id == user.id).first()
             if not db_user:
-                await update.message.reply_text("❌ Пользователь не найден")
+                await update.message.reply_text(
+                    markdownify("❌ Пользователь не найден"),
+                    parse_mode='HTML'
+                )
                 return
             
             if db_user.is_authenticated:
@@ -516,7 +532,10 @@ class TelegramBot:
             await update.message.reply_text(status_text)
             
         except Exception as e:
-            await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+            await update.message.reply_text(
+                markdownify(f"❌ Ошибка: {str(e)}"),
+                parse_mode='HTML'
+            )
         finally:
             db.close()
     
@@ -528,11 +547,17 @@ class TelegramBot:
         try:
             db_user = db.query(User).filter(User.telegram_id == user.id).first()
             if not db_user:
-                await update.message.reply_text("❌ Пользователь не найден")
+                await update.message.reply_text(
+                    markdownify("❌ Пользователь не найден"),
+                    parse_mode='HTML'
+                )
                 return
             
             if not db_user.is_authenticated:
-                await update.message.reply_text("❌ Вы не аутентифицированы")
+                await update.message.reply_text(
+                    markdownify("❌ Вы не аутентифицированы"),
+                    parse_mode='HTML'
+                )
                 return
             
             # Выходим из системы (обновляет user объект)
@@ -567,7 +592,10 @@ class TelegramBot:
         try:
             db_user = db.query(User).filter(User.telegram_id == user.id).first()
             if not db_user:
-                await update.message.reply_text("❌ Пользователь не найден")
+                await update.message.reply_text(
+                    markdownify("❌ Пользователь не найден"),
+                    parse_mode='HTML'
+                )
                 return
             
             # Очищаем состояние пользователя
@@ -630,7 +658,10 @@ class TelegramBot:
             # Получаем пользователя
             db_user = db.query(User).filter(User.telegram_id == user.id).first()
             if not db_user:
-                await update.message.reply_text("❌ Пользователь не найден. Используйте /start")
+                await update.message.reply_text(
+                    markdownify("❌ Пользователь не найден. Используйте /start"),
+                    parse_mode='HTML'
+                )
                 return
             
             # Проверяем аутентификацию
@@ -651,7 +682,7 @@ class TelegramBot:
                     f"❌ Достигнут лимит каналов для подписки **{tier['name']}**: {db_user.max_channels}\n\n"
                     f"💎 Для увеличения лимита обратитесь к администратору\n"
                     f"Текущая подписка: /subscription",
-                    parse_mode='Markdown'
+                    parse_mode='HTML'
                 )
                 return
             
@@ -659,7 +690,10 @@ class TelegramBot:
             if db_user.channels:
                 for channel in db_user.channels:
                     if channel.channel_username == channel_username:
-                        await update.message.reply_text(f"❌ Канал @{channel_username} уже добавлен в ваш список")
+                        await update.message.reply_text(
+                            markdownify(f"❌ Канал @{channel_username} уже добавлен в ваш список"),
+                            parse_mode='HTML'
+                        )
                         return
             
             # Получаем или создаем канал (может быть уже добавлен другими пользователями)
@@ -675,7 +709,10 @@ class TelegramBot:
             )
             
         except Exception as e:
-            await update.message.reply_text(f"❌ Ошибка при добавлении канала: {str(e)}")
+            await update.message.reply_text(
+                markdownify(f"❌ Ошибка при добавлении канала: {str(e)}"),
+                parse_mode='HTML'
+            )
         finally:
             db.close()
     
@@ -690,7 +727,10 @@ class TelegramBot:
         try:
             db_user = db.query(User).filter(User.telegram_id == user.id).first()
             if not db_user:
-                await update.message.reply_text("❌ Пользователь не найден. Используйте /start")
+                await update.message.reply_text(
+                    markdownify("❌ Пользователь не найден. Используйте /start"),
+                    parse_mode='HTML'
+                )
                 return
             
             # Проверяем аутентификацию
@@ -732,7 +772,10 @@ class TelegramBot:
             await update.message.reply_text(text, reply_markup=reply_markup)
             
         except Exception as e:
-            await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+            await update.message.reply_text(
+                markdownify(f"❌ Ошибка: {str(e)}"),
+                parse_mode='HTML'
+            )
         finally:
             db.close()
     
@@ -749,7 +792,10 @@ class TelegramBot:
         try:
             db_user = db.query(User).filter(User.telegram_id == user.id).first()
             if not db_user:
-                await update.message.reply_text("❌ Пользователь не найден. Используйте /login")
+                await update.message.reply_text(
+                    markdownify("❌ Пользователь не найден. Используйте /login"),
+                    parse_mode='HTML'
+                )
                 return
             
             # Проверка аутентификации
@@ -765,7 +811,10 @@ class TelegramBot:
             client = await shared_auth_manager.get_user_client(user.id)
             
             if not client:
-                await update.message.reply_text("❌ Не удалось подключиться к Telegram")
+                await update.message.reply_text(
+                    markdownify("❌ Не удалось подключиться к Telegram"),
+                    parse_mode='HTML'
+                )
                 return
             
             # Если нет аргументов - показываем список доступных групп
@@ -818,7 +867,7 @@ class TelegramBot:
                 
                 text += "💡 Скопируйте команду и отправьте"
                 
-                await update.message.reply_text(text, parse_mode='Markdown')
+                await update.message.reply_text(text, parse_mode='HTML')
                 return
             
             # Проверка лимита групп
@@ -920,7 +969,7 @@ class TelegramBot:
                     
                     text += "💡 Найдите нужную группу и скопируйте команду"
                     
-                    await update.message.reply_text(text, parse_mode='Markdown')
+                    await update.message.reply_text(text, parse_mode='HTML')
                     return
                 
                 elif last_part.lstrip('-').isdigit():
@@ -940,7 +989,10 @@ class TelegramBot:
                         )
                         return
             else:
-                await update.message.reply_text("❌ Неверный формат ссылки или ID")
+                await update.message.reply_text(
+                    markdownify("❌ Неверный формат ссылки или ID"),
+                    parse_mode='HTML'
+                )
                 return
             
             # Проверяем что получили entity
@@ -956,7 +1008,10 @@ class TelegramBot:
                     return
             
             if not group_entity:
-                await update.message.reply_text("❌ Не удалось получить информацию о группе")
+                await update.message.reply_text(
+                    markdownify("❌ Не удалось получить информацию о группе"),
+                    parse_mode='HTML'
+                )
                 return
             
             # Извлекаем данные
@@ -988,7 +1043,7 @@ class TelegramBot:
                 await update.message.reply_text(
                     f"ℹ️ Группа **{safe_title}** уже добавлена\n\n"
                     f"Используйте /my_groups для просмотра",
-                    parse_mode='Markdown'
+                    parse_mode='HTML'
                 )
                 return
             
@@ -1008,7 +1063,7 @@ class TelegramBot:
                 f"🔔 Мониторинг упоминаний активирован\n"
                 f"📊 Используйте /group_digest для получения резюме разговоров\n\n"
                 f"Настройки: /group_settings",
-                parse_mode='Markdown'
+                parse_mode='HTML'
             )
             
         except Exception as e:
@@ -1034,7 +1089,10 @@ class TelegramBot:
         try:
             db_user = db.query(User).filter(User.telegram_id == user.id).first()
             if not db_user:
-                await update.message.reply_text("❌ Пользователь не найден")
+                await update.message.reply_text(
+                    markdownify("❌ Пользователь не найден"),
+                    parse_mode='HTML'
+                )
                 return
             
             # Получаем группы пользователя
@@ -1058,7 +1116,8 @@ class TelegramBot:
             tier = get_subscription_info(db_user.subscription_type)
             max_groups = tier.get('max_groups', 0)
             
-            text = f"📊 **Ваши группы** ({len(groups)}/{max_groups}):\n\n"
+            # Используем обычный Markdown, затем конвертируем через markdownify()
+            text = f"# 📊 Ваши группы ({len(groups)}/{max_groups})\n\n"
             
             for i, group in enumerate(groups, 1):
                 # Получаем настройки для группы
@@ -1072,19 +1131,23 @@ class TelegramBot:
                 status = "🟢" if subscription.is_active else "🔴"
                 mentions = "🔔" if subscription.mentions_enabled else "🔕"
                 
-                # Экранируем спецсимволы Markdown в названии
+                # Название группы без ручного экранирования
                 display_name = group.group_title or str(group.group_id)
-                safe_name = display_name.replace('_', '\\_').replace('*', '\\*').replace('[', '\\[').replace('`', '\\`')
                 
-                text += f"{i}. {status} **{safe_name}**\n"
+                text += f"{i}. {status} **{display_name}**\n"
                 text += f"   {mentions} Упоминания | ID: `{group.group_id}`\n"
             
             text += f"\n💡 Используйте /group_settings для настройки уведомлений"
             
-            await update.message.reply_text(text, parse_mode='Markdown')
+            # Конвертируем через telegramify-markdown для безопасного экранирования
+            safe_text = markdownify(text)
+            await update.message.reply_text(safe_text, parse_mode='HTML')
             
         except Exception as e:
-            await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+            await update.message.reply_text(
+                markdownify(f"❌ Ошибка: {str(e)}"),
+                parse_mode='HTML'
+            )
         finally:
             db.close()
     
@@ -1100,7 +1163,10 @@ class TelegramBot:
         try:
             db_user = db.query(User).filter(User.telegram_id == user.id).first()
             if not db_user:
-                await update.message.reply_text("❌ Пользователь не найден")
+                await update.message.reply_text(
+                    markdownify("❌ Пользователь не найден"),
+                    parse_mode='HTML'
+                )
                 return
             
             # Проверка аутентификации
@@ -1140,7 +1206,7 @@ class TelegramBot:
                     # /group_digest group_name - пока не поддерживаем
                     await update.message.reply_text(
                         "💡 Укажите количество часов: `/group_digest 24`",
-                        parse_mode='Markdown'
+                        parse_mode='HTML'
                     )
                     return
             elif len(args) == 2:
@@ -1159,7 +1225,7 @@ class TelegramBot:
                     text += f"{i}. {safe_display}\n"
                 text += f"\nИспользуйте: `/group_digest <номер> <часы>`"
                 
-                await update.message.reply_text(text, parse_mode='Markdown')
+                await update.message.reply_text(text, parse_mode='HTML')
                 return
             
             # Генерируем дайджест
@@ -1168,7 +1234,7 @@ class TelegramBot:
                 f"⏳ Генерация дайджеста для группы **{safe_group_title}**...\n"
                 f"Период: {hours} часов\n\n"
                 "Это может занять 20-30 секунд ⏰",
-                parse_mode='Markdown'
+                parse_mode='HTML'
             )
             
             # Получаем клиент
@@ -1176,7 +1242,10 @@ class TelegramBot:
             client = await shared_auth_manager.get_user_client(user.id)
             
             if not client:
-                await update.message.reply_text("❌ Не удалось подключиться к Telegram")
+                await update.message.reply_text(
+                    markdownify("❌ Не удалось подключиться к Telegram"),
+                    parse_mode='HTML'
+                )
                 return
             
             # Получаем сообщения из группы
@@ -1236,7 +1305,7 @@ class TelegramBot:
                 )
                 
                 # Отправляем результат
-                await update.message.reply_text(formatted, parse_mode='Markdown')
+                await update.message.reply_text(formatted, parse_mode='HTML')
                 
             except Exception as e:
                 logger.error(f"❌ Ошибка генерации дайджеста: {e}")
@@ -1258,7 +1327,10 @@ class TelegramBot:
         try:
             db_user = db.query(User).filter(User.telegram_id == user.id).first()
             if not db_user:
-                await update.message.reply_text("❌ Пользователь не найден")
+                await update.message.reply_text(
+                    markdownify("❌ Пользователь не найден"),
+                    parse_mode='HTML'
+                )
                 return
             
             # Получаем или создаем настройки
@@ -1319,10 +1391,13 @@ class TelegramBot:
                     else:
                         text = "❌ Период должен быть от 1 до 168 часов (неделя)"
             
-            await update.message.reply_text(text, parse_mode='Markdown')
+            await update.message.reply_text(text, parse_mode='HTML')
             
         except Exception as e:
-            await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+            await update.message.reply_text(
+                markdownify(f"❌ Ошибка: {str(e)}"),
+                parse_mode='HTML'
+            )
         finally:
             db.close()
     
@@ -1449,14 +1524,20 @@ class TelegramBot:
                 topics = [topic.strip() for topic in text.split(',') if topic.strip()]
                 
                 if not topics:
-                    await update.message.reply_text("❌ Темы не распознаны. Попробуйте еще раз.")
+                    await update.message.reply_text(
+                        markdownify("❌ Темы не распознаны. Попробуйте еще раз."),
+                        parse_mode='HTML'
+                    )
                     return
                 
                 db = SessionLocal()
                 try:
                     db_user = db.query(User).filter(User.telegram_id == user.id).first()
                     if not db_user:
-                        await update.message.reply_text("❌ Пользователь не найден")
+                        await update.message.reply_text(
+                    markdownify("❌ Пользователь не найден"),
+                    parse_mode='HTML'
+                )
                         return
                     
                     # Получаем текущие настройки
@@ -1486,7 +1567,10 @@ class TelegramBot:
                                 "Используйте /digest для просмотра всех настроек."
                             )
                         else:
-                            await update.message.reply_text("❌ Ошибка сохранения тем")
+                            await update.message.reply_text(
+                                markdownify("❌ Ошибка сохранения тем"),
+                                parse_mode='HTML'
+                            )
                     
                     # Очищаем состояние
                     del self.user_states[user.id]
@@ -1506,7 +1590,7 @@ class TelegramBot:
                 "2. Откройте веб-форму по ссылке\n"
                 "3. Введите код там\n\n"
                 "🔐 Веб-форма защищена HTTPS шифрованием",
-                parse_mode='Markdown'
+                parse_mode='HTML'
             )
             return
         
@@ -1551,7 +1635,7 @@ class TelegramBot:
                 "💡 **Альтернатива:**\n"
                 "• Отправьте голосовое БЕЗ команды\n"
                 "• Выберите кнопку \"💡 /ask\"",
-                parse_mode='Markdown'
+                parse_mode='HTML'
             )
             return
         
@@ -1561,7 +1645,10 @@ class TelegramBot:
         try:
             db_user = db.query(User).filter(User.telegram_id == user.id).first()
             if not db_user:
-                await update.message.reply_text("❌ Пользователь не найден. Используйте /start")
+                await update.message.reply_text(
+                    markdownify("❌ Пользователь не найден. Используйте /start"),
+                    parse_mode='HTML'
+                )
                 return
             
             if not db_user.is_authenticated:
@@ -1578,7 +1665,7 @@ class TelegramBot:
                     "📭 У вас пока нет постов в базе данных.\n\n"
                     "💡 Добавьте каналы командой `/add_channel @channel_name`\n"
                     "Парсинг начнется автоматически через несколько минут.",
-                    parse_mode='Markdown'
+                    parse_mode='HTML'
                 )
                 return
             
@@ -1587,11 +1674,10 @@ class TelegramBot:
             
             # Вызов RAG service
             result = await self._call_rag_service(
-                "/rag/query",
+                "/rag/ask",
                 user_id=db_user.id,
                 query=query_text,
-                top_k=5,
-                min_score=0.7
+                context_limit=10
             )
             
             if not result:
@@ -1603,7 +1689,11 @@ class TelegramBot:
             
             # Проверяем ответ
             if "error" in result:
-                await update.message.reply_text(f"❌ Ошибка: {result['error']}")
+                # Ошибки от RAG могут содержать технические символы - отправляем как plain text
+                await update.message.reply_text(
+                    f"❌ Ошибка RAG-сервиса:\n\n{result['error']}\n\n"
+                    f"💡 Попробуйте переформулировать вопрос"
+                )
                 return
             
             answer = result.get("answer", "Не удалось сгенерировать ответ")
@@ -1624,13 +1714,16 @@ class TelegramBot:
             
             await update.message.reply_text(
                 response_text,
-                parse_mode='Markdown',
+                parse_mode='HTML',
                 disable_web_page_preview=True
             )
             
         except Exception as e:
             logger.error(f"❌ Ошибка команды /ask: {e}")
-            await update.message.reply_text(f"❌ Произошла ошибка: {str(e)}")
+            await update.message.reply_text(
+                markdownify(f"❌ Произошла ошибка: {str(e)}"),
+                parse_mode='HTML'
+            )
         finally:
             db.close()
     
@@ -1642,7 +1735,10 @@ class TelegramBot:
         try:
             db_user = db.query(User).filter(User.telegram_id == user.id).first()
             if not db_user:
-                await update.message.reply_text("❌ Пользователь не найден. Используйте /start")
+                await update.message.reply_text(
+                    markdownify("❌ Пользователь не найден. Используйте /start"),
+                    parse_mode='HTML'
+                )
                 return
             
             if not db_user.is_authenticated:
@@ -1679,7 +1775,7 @@ class TelegramBot:
                     "**Пример:**\n"
                     "• `/ask Что нового в AI?`\n"
                     "• `/ask Расскажи про блокчейн`",
-                    parse_mode='Markdown'
+                    parse_mode='HTML'
                 )
                 return
             
@@ -1704,13 +1800,16 @@ class TelegramBot:
             
             await update.message.reply_text(
                 response_text,
-                parse_mode='Markdown',
+                parse_mode='HTML',
                 disable_web_page_preview=True
             )
             
         except Exception as e:
             logger.error(f"❌ Ошибка команды /recommend: {e}")
-            await update.message.reply_text(f"❌ Произошла ошибка: {str(e)}")
+            await update.message.reply_text(
+                markdownify(f"❌ Произошла ошибка: {str(e)}"),
+                parse_mode='HTML'
+            )
         finally:
             db.close()
     
@@ -1738,7 +1837,7 @@ class TelegramBot:
                 "💡 **Альтернатива:**\n"
                 "• Отправьте голосовое БЕЗ команды\n"
                 "• Выберите кнопку \"🔍 /search\"",
-                parse_mode='Markdown'
+                parse_mode='HTML'
             )
             return
         
@@ -1748,7 +1847,10 @@ class TelegramBot:
         try:
             db_user = db.query(User).filter(User.telegram_id == user.id).first()
             if not db_user:
-                await update.message.reply_text("❌ Пользователь не найден. Используйте /start")
+                await update.message.reply_text(
+                    markdownify("❌ Пользователь не найден. Используйте /start"),
+                    parse_mode='HTML'
+                )
                 return
             
             if not db_user.is_authenticated:
@@ -1821,14 +1923,17 @@ class TelegramBot:
             
             await update.message.reply_text(
                 response_text,
-                parse_mode='Markdown',
+                parse_mode='HTML',
                 disable_web_page_preview=True,
                 reply_markup=reply_markup
             )
             
         except Exception as e:
             logger.error(f"❌ Ошибка команды /search: {e}")
-            await update.message.reply_text(f"❌ Произошла ошибка: {str(e)}")
+            await update.message.reply_text(
+                markdownify(f"❌ Произошла ошибка: {str(e)}"),
+                parse_mode='HTML'
+            )
         finally:
             db.close()
     
@@ -1922,7 +2027,7 @@ class TelegramBot:
             
             await query.edit_message_text(
                 response_text,
-                parse_mode='Markdown',
+                parse_mode='HTML',
                 disable_web_page_preview=True,
                 reply_markup=reply_markup
             )
@@ -1941,7 +2046,10 @@ class TelegramBot:
         try:
             db_user = db.query(User).filter(User.telegram_id == user.id).first()
             if not db_user:
-                await update.message.reply_text("❌ Пользователь не найден. Используйте /start")
+                await update.message.reply_text(
+                    markdownify("❌ Пользователь не найден. Используйте /start"),
+                    parse_mode='HTML'
+                )
                 return
             
             if not db_user.is_authenticated:
@@ -2022,13 +2130,16 @@ class TelegramBot:
             
             await update.message.reply_text(
                 message_text,
-                parse_mode='Markdown',
+                parse_mode='HTML',
                 reply_markup=reply_markup
             )
             
         except Exception as e:
             logger.error(f"❌ Ошибка команды /digest: {e}")
-            await update.message.reply_text(f"❌ Произошла ошибка: {str(e)}")
+            await update.message.reply_text(
+                markdownify(f"❌ Произошла ошибка: {str(e)}"),
+                parse_mode='HTML'
+            )
         finally:
             db.close()
     
@@ -2071,7 +2182,7 @@ class TelegramBot:
                     f"Ваша подписка: {db_user.subscription_type}\n\n"
                     "💡 Обновите подписку для использования голосовых команд:\n"
                     "/subscription",
-                    parse_mode='Markdown'
+                    parse_mode='HTML'
                 )
                 return
             
@@ -2091,7 +2202,7 @@ class TelegramBot:
                 await update.message.reply_text(
                     f"❌ Достигнут дневной лимит голосовых запросов: {voice_limit}\n\n"
                     f"Попробуйте завтра или обновите подписку: /subscription",
-                    parse_mode='Markdown'
+                    parse_mode='HTML'
                 )
                 return
             
@@ -2218,7 +2329,7 @@ class TelegramBot:
                             f"✅ **Распознано:**\n\n"
                             f"\"{transcription}\"\n\n"
                             f"🤔 Выберите команду для выполнения:",
-                            parse_mode='Markdown',
+                            parse_mode='HTML',
                             reply_markup=reply_markup
                         )
                         
@@ -2326,14 +2437,23 @@ class TelegramBot:
             answer = result.get("answer", "Не удалось найти ответ")
             
             # Форматируем ответ (источники уже включены в answer от RAG service)
-            # НЕ используем parse_mode, так как RAG может вернуть спецсимволы Markdown
+            # RAG возвращает Markdown - конвертируем в формат Telegram через markdownify
             response_text = f"💡 Ответ:\n\n{answer}"
             
-            await update.message.reply_text(response_text)
+            # Конвертируем Markdown → MarkdownV2 для правильного отображения в Telegram
+            formatted_response = markdownify(response_text)
+            
+            await update.message.reply_text(
+                formatted_response,
+                parse_mode='HTML'
+            )
         
         except Exception as e:
             logger.error(f"❌ Ошибка _execute_ask_with_text: {e}")
-            await update.message.reply_text("❌ Ошибка выполнения команды")
+            await update.message.reply_text(
+                markdownify("❌ Ошибка выполнения команды"),
+                parse_mode='HTML'
+            )
     
     async def _execute_search_with_text(
         self,
@@ -2386,7 +2506,10 @@ class TelegramBot:
         
         except Exception as e:
             logger.error(f"❌ Ошибка _execute_search_with_text: {e}")
-            await update.message.reply_text("❌ Ошибка выполнения команды")
+            await update.message.reply_text(
+                markdownify("❌ Ошибка выполнения команды"),
+                parse_mode='HTML'
+            )
     
     async def handle_voice_ask_callback(self, query, context: ContextTypes.DEFAULT_TYPE):
         """Обработка кнопки voice_ask - выполнить /ask с транскрипцией"""
@@ -2513,7 +2636,7 @@ class TelegramBot:
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 await query.edit_message_text(
                     "📅 **Выберите частоту дайджестов:**",
-                    parse_mode='Markdown',
+                    parse_mode='HTML',
                     reply_markup=reply_markup
                 )
             
@@ -2549,7 +2672,7 @@ class TelegramBot:
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 await query.edit_message_text(
                     "🕐 **Выберите время отправки:**",
-                    parse_mode='Markdown',
+                    parse_mode='HTML',
                     reply_markup=reply_markup
                 )
             
@@ -2608,7 +2731,7 @@ class TelegramBot:
                     "• **Краткий** - только ключевые моменты\n"
                     "• **Детальный** - подробный обзор\n"
                     "• **Executive** - для руководителей",
-                    parse_mode='Markdown',
+                    parse_mode='HTML',
                     reply_markup=reply_markup
                 )
             
@@ -2644,7 +2767,7 @@ class TelegramBot:
                     "**Пример:**\n"
                     "`AI, блокчейн, стартапы, технологии`\n\n"
                     "Или отправьте `/cancel` для отмены",
-                    parse_mode='Markdown'
+                    parse_mode='HTML'
                 )
             
             elif data == "digest_enable":
@@ -2767,13 +2890,13 @@ class TelegramBot:
         if edit:
             await query_or_update.edit_message_text(
                 message_text,
-                parse_mode='Markdown',
+                parse_mode='HTML',
                 reply_markup=reply_markup
             )
         else:
             await query_or_update.reply_text(
                 message_text,
-                parse_mode='Markdown',
+                parse_mode='HTML',
                 reply_markup=reply_markup
             )
     
@@ -2823,97 +2946,100 @@ class TelegramBot:
             
             # Базовая справка для всех
             base_help = """
-🤖 **Telegram Channel Parser Bot - Справка**
+🤖 <b>Telegram Channel Parser Bot - Справка</b>
 
-🔐 **Аутентификация:**
-/login INVITE\\_CODE - QR авторизация (БЕЗ SMS!)
+🔐 <b>Аутентификация:</b>
+/login INVITE_CODE - QR авторизация (БЕЗ SMS!)
 /auth - Веб-форма (свои API ключи)
-/auth\\_status - Проверить статус
+/auth_status - Проверить статус
 /logout - Выйти из системы
 
-📋 **Управление каналами:**
-/add\\_channel @channel\\_name - Добавить канал
-/my\\_channels - Список ваших каналов
-/remove\\_channel - Удалить канал
+📋 <b>Управление каналами:</b>
+/add_channel @channel_name - Добавить канал
+/my_channels - Список ваших каналов
+/remove_channel - Удалить канал
 
-👥 **Управление группами:**
-/add\\_group <ссылка> - Добавить группу для мониторинга
-/my\\_groups - Список отслеживаемых групп
-/group\\_digest <часы> - Дайджест разговора (AI)
-/group\\_settings - Настройки уведомлений
+👥 <b>Управление группами:</b>
+/add_group - Добавить группу для мониторинга
+/my_groups - Список отслеживаемых групп
+/group_digest - Дайджест разговора (AI)
+/group_settings - Настройки уведомлений
 
-🤖 **RAG & AI:**
-/ask <вопрос> - Поиск ответа в постах
-/search <запрос> - Гибридный поиск (посты + веб)
+🤖 <b>RAG &amp; AI:</b>
+/ask - Поиск ответа в постах
+/search - Гибридный поиск (посты + веб)
 /recommend - Персональные рекомендации
 /digest - Настроить AI-дайджесты
 
-🎤 **Голосовые команды (Premium/Enterprise):**
-📌 **Вариант 1:** Команда → Голосовое
-• Отправьте `/ask` или `/search`
+🎤 <b>Голосовые команды (Premium/Enterprise):</b>
+📌 <b>Вариант 1:</b> Команда → Голосовое
+• Отправьте /ask или /search
 • Затем отправьте голосовое с запросом
 • Автоматически выполнится выбранная команда
 
-📌 **Вариант 2:** Голосовое → AI выбирает
+📌 <b>Вариант 2:</b> Голосовое → AI выбирает
 • Отправьте голосовое БЕЗ команды
 • AI автоматически выберет /ask или /search
 
-🔄 **Сброс режима:**
-• `/reset` - сбросить состояние (вернуться к AI)
+🔄 <b>Сброс режима:</b>
+• /reset - сбросить состояние (вернуться к AI)
 • Авто-сброс через 5 минут после команды
 
 ⚠️ Ограничения: макс. 60 сек, лимиты по подписке
 
-💎 **Подписка:**
+💎 <b>Подписка:</b>
 /subscription - Информация о вашей подписке
 
-**Примеры команд:**
-• `/ask Что нового в AI?`
-• `/search квантовые компьютеры`
-• `/add_channel @durov`
-• `/add_group https://t.me/my\\_group`
-• `/group_digest 24`
+<b>Примеры команд:</b>
+• /ask Что нового в AI?
+• /search квантовые компьютеры
+• /add_channel @durov
+• /add_group https://t.me/my_group
+• /group_digest 24
 """
             
             # Админские команды
             admin_help = """
-👑 **КОМАНДЫ АДМИНИСТРАТОРА:**
+👑 <b>КОМАНДЫ АДМИНИСТРАТОРА:</b>
 
-📱 **Админ панель (рекомендуется):**
+📱 <b>Админ панель (рекомендуется):</b>
 /admin - Открыть Admin Panel Mini App
   • Управление пользователями (роли, подписки)
   • Создание инвайт кодов
   • Статистика и графики
   • Блокировка/разблокировка
 
-📝 **Текстовые админ команды:**
-/admin\\_invite - Создать инвайт код
-/admin\\_users - Список всех пользователей
-/admin\\_user <telegram\\_id> - Информация о пользователе
-/admin\\_grant <telegram\\_id> <subscription> <days> - Выдать подписку
-/admin\\_stats - Общая статистика
+📝 <b>Текстовые админ команды:</b>
+/admin_invite - Создать инвайт код
+/admin_users - Список всех пользователей
+/admin_user - Информация о пользователе
+/admin_grant - Выдать подписку
+/admin_stats - Общая статистика
 
-💡 **Рекомендация:** Используйте `/admin` для удобного управления через Mini App
+💡 <b>Рекомендация:</b> Используйте /admin для удобного управления через Mini App
 """ if is_admin else ""
             
             footer = """
-💡 **Полезная информация:**
+💡 <b>Полезная информация:</b>
 • Парсинг каналов: автоматически каждые 30 минут
 • QR авторизация: без SMS кодов, за 30 секунд
 • RAG поиск: по всем вашим постам с AI
 • Дайджесты: персонализированные сводки
 
-📚 **Документация:**
-Подробные гайды и примеры: /help\\_docs
+📚 <b>Документация:</b>
+Подробные гайды и примеры: /help_docs
             """
             
             help_text = base_help + admin_help + footer
             
-            await update.message.reply_text(help_text, parse_mode='Markdown')
+            await update.message.reply_text(help_text, parse_mode='HTML')
             
         except Exception as e:
             logger.error(f"Ошибка в help_command: {e}")
-            await update.message.reply_text("❌ Произошла ошибка")
+            await update.message.reply_text(
+                markdownify("❌ Произошла ошибка"),
+                parse_mode='HTML'
+            )
         finally:
             db.close()
     
@@ -2925,7 +3051,10 @@ class TelegramBot:
         try:
             db_user = db.query(User).filter(User.telegram_id == user.id).first()
             if not db_user:
-                await update.message.reply_text("❌ Пользователь не найден")
+                await update.message.reply_text(
+                    markdownify("❌ Пользователь не найден"),
+                    parse_mode='HTML'
+                )
                 return
             
             text = f"🔍 **Debug Status**\n\n"
@@ -2965,7 +3094,7 @@ class TelegramBot:
             text += f"• File exists: {'✅ YES' if session_exists else '❌ NO'}\n"
             text += f"• Active client: {'✅ YES' if user.id in shared_auth_manager.active_clients else '❌ NO'}\n"
             
-            await update.message.reply_text(text, parse_mode='Markdown')
+            await update.message.reply_text(text, parse_mode='HTML')
             
         except Exception as e:
             logger.error(f"Debug status error: {e}")
@@ -2981,7 +3110,10 @@ class TelegramBot:
         try:
             db_user = db.query(User).filter(User.telegram_id == user.id).first()
             if not db_user:
-                await update.message.reply_text("❌ Пользователь не найден")
+                await update.message.reply_text(
+                    markdownify("❌ Пользователь не найден"),
+                    parse_mode='HTML'
+                )
                 return
             
             # Разблокируем
@@ -2997,11 +3129,14 @@ class TelegramBot:
                 "• Счетчик попыток сброшен\n"
                 "• Ошибки очищены\n\n"
                 "Теперь можете попробовать `/login` снова",
-                parse_mode='Markdown'
+                parse_mode='HTML'
             )
             
         except Exception as e:
-            await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+            await update.message.reply_text(
+                markdownify(f"❌ Ошибка: {str(e)}"),
+                parse_mode='HTML'
+            )
         finally:
             db.close()
     
@@ -3013,7 +3148,10 @@ class TelegramBot:
         try:
             db_user = db.query(User).filter(User.telegram_id == user.id).first()
             if not db_user:
-                await update.message.reply_text("❌ Пользователь не найден")
+                await update.message.reply_text(
+                    markdownify("❌ Пользователь не найден"),
+                    parse_mode='HTML'
+                )
                 return
             
             # Очищаем все данные авторизации
@@ -3044,7 +3182,7 @@ class TelegramBot:
                 "• Session файл\n"
                 "• Счетчики попыток\n\n"
                 "🔄 Используйте `/login INVITE_CODE` для новой попытки",
-                parse_mode='Markdown'
+                parse_mode='HTML'
             )
             
         except Exception as e:

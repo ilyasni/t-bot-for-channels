@@ -36,7 +36,7 @@ async def debug_test_phone_command(update: Update, context: ContextTypes.DEFAULT
             "• Не заблокирован ли номер Telegram'ом\n"
             "• FloodWait ограничения\n\n"
             "⚠️ **Внимание:** Отправит реальный SMS код!",
-            parse_mode='Markdown'
+            parse_mode='HTML'
         )
         return
     
@@ -83,7 +83,7 @@ async def debug_test_phone_command(update: Update, context: ContextTypes.DEFAULT
         text += f"• Telegram считает активность подозрительной\n"
         text += f"• Нужно подождать 30-60 минут между попытками"
         
-        await update.message.reply_text(text, parse_mode='Markdown')
+        await update.message.reply_text(text, parse_mode='HTML')
         
     except PhoneNumberBannedError:
         await update.message.reply_text(
@@ -97,7 +97,7 @@ async def debug_test_phone_command(update: Update, context: ContextTypes.DEFAULT
             f"**Решение:**\n"
             f"• Используйте другой номер телефона\n"
             f"• Обратитесь в поддержку Telegram",
-            parse_mode='Markdown'
+            parse_mode='HTML'
         )
     
     except PhoneNumberInvalidError:
@@ -122,7 +122,7 @@ async def debug_test_phone_command(update: Update, context: ContextTypes.DEFAULT
             f"**Решение:**\n"
             f"• Подождите указанное время\n"
             f"• Попробуйте снова",
-            parse_mode='Markdown'
+            parse_mode='HTML'
         )
     
     except Exception as e:
@@ -135,7 +135,7 @@ async def debug_test_phone_command(update: Update, context: ContextTypes.DEFAULT
             f"❌ Тип: `{error_type}`\n"
             f"📝 Сообщение: {error_msg}\n\n"
             f"Скопируйте эту ошибку и отправьте администратору",
-            parse_mode='Markdown'
+            parse_mode='HTML'
         )
         
         logger.error(f"Debug test phone error for {phone}: {error_type} - {error_msg}")
@@ -161,7 +161,7 @@ async def debug_check_sessions_command(update: Update, context: ContextTypes.DEF
     text += f"3. Terminate all other sessions\n\n"
     text += f"После терминации подождите 5-10 минут и попробуйте `/login` снова."
     
-    await update.message.reply_text(text, parse_mode='Markdown')
+    await update.message.reply_text(text, parse_mode='HTML')
 
 
 async def debug_force_auth_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -191,7 +191,7 @@ async def debug_force_auth_command(update: Update, context: ContextTypes.DEFAULT
             "• Session файл существует\n"
             "• Пользователь завершил QR auth но БД не обновилась\n"
             "• Нужно вручную активировать авторизацию",
-            parse_mode='Markdown'
+            parse_mode='HTML'
         )
         return
     
@@ -226,7 +226,7 @@ async def debug_force_auth_command(update: Update, context: ContextTypes.DEFAULT
                 f"**Решение:**\n"
                 f"• Пользователь должен завершить QR авторизацию\n"
                 f"• Или использовать старый `/login` с SMS",
-                parse_mode='Markdown'
+                parse_mode='HTML'
             )
             return
         
@@ -250,7 +250,7 @@ async def debug_force_auth_command(update: Update, context: ContextTypes.DEFAULT
                     f"📊 Каналов: {len(target_user.channels)}/{target_user.max_channels}\n"
                     f"✅ is_authenticated: TRUE\n\n"
                     f"Пользователь может теперь использовать `/my_channels` и другие команды.",
-                    parse_mode='Markdown'
+                    parse_mode='HTML'
                 )
                 
                 logger.info(f"✅ ADMIN {user.id} force activated auth for user {target_user.id}")
@@ -266,7 +266,7 @@ async def debug_force_auth_command(update: Update, context: ContextTypes.DEFAULT
                     f"• Пользователь разлогинился из Telegram\n\n"
                     f"**Решение:**\n"
                     f"• Пользователь должен пройти QR авторизацию заново",
-                    parse_mode='Markdown'
+                    parse_mode='HTML'
                 )
         
         except Exception as e:
@@ -274,7 +274,7 @@ async def debug_force_auth_command(update: Update, context: ContextTypes.DEFAULT
                 f"❌ **Ошибка проверки сессии**\n\n"
                 f"📝 {str(e)}\n\n"
                 f"Возможно session файл поврежден или недоступен",
-                parse_mode='Markdown'
+                parse_mode='HTML'
             )
             logger.error(f"Force auth error for user {target_user.id}: {e}")
     
@@ -314,7 +314,7 @@ async def debug_reset_auth_command(update: Update, context: ContextTypes.DEFAULT
             "• Очищает из памяти активные клиенты\n"
             "• Удаляет QR сессии из Redis\n\n"
             "Используйте для тестирования QR login с нуля",
-            parse_mode='Markdown'
+            parse_mode='HTML'
         )
         return
     
@@ -443,7 +443,7 @@ async def debug_reset_auth_command(update: Update, context: ContextTypes.DEFAULT
         
         await update.message.reply_text(
             "\n".join(report),
-            parse_mode='Markdown'
+            parse_mode='HTML'
         )
         
         logger.info(f"✅ ADMIN {user.id} reset auth for user {user_id} (telegram_id: {telegram_id})")
@@ -453,7 +453,7 @@ async def debug_reset_auth_command(update: Update, context: ContextTypes.DEFAULT
             f"❌ **Критическая ошибка**\n\n"
             f"📝 {str(e)}\n\n"
             f"Проверьте логи сервера",
-            parse_mode='Markdown'
+            parse_mode='HTML'
         )
         logger.error(f"Critical error in debug_reset_auth: {e}", exc_info=True)
     
@@ -505,7 +505,7 @@ async def debug_delete_user_command(update: Update, context: ContextTypes.DEFAUL
                 "• Полностью удаляет пользователя из БД\n"
                 "• Удаляет все связанные данные\n"
                 "• Удаляет session файл",
-                parse_mode='Markdown'
+                parse_mode='HTML'
             )
             return
         
@@ -616,7 +616,7 @@ async def debug_delete_user_command(update: Update, context: ContextTypes.DEFAUL
                 
                 await update.message.reply_text(
                     "\n".join(report),
-                    parse_mode='Markdown'
+                    parse_mode='HTML'
                 )
                 logger.info(f"✅ ADMIN {user.id} deleted user {user_id}")
                 
@@ -626,13 +626,17 @@ async def debug_delete_user_command(update: Update, context: ContextTypes.DEFAUL
                 report.append(f"❌ Ошибка БД: {error_msg}")
                 await update.message.reply_text(
                     "\n".join(report),
-                    parse_mode='Markdown'
+                    parse_mode='HTML'
                 )
                 logger.error(f"Error deleting user from DB: {e}", exc_info=True)
         
         except Exception as e:
             logger.error(f"Critical error in try block: {e}", exc_info=True)
-            await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+            from telegram_formatter import markdownify
+            await update.message.reply_text(
+                markdownify(f"❌ Ошибка: {str(e)}"),
+                parse_mode='HTML'
+            )
         finally:
             db.close()
             logger.info("🔒 DB session closed")

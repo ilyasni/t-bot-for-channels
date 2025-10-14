@@ -37,7 +37,7 @@ async def login_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
             "💡 **Использование:** `/login INVITE_CODE`\n\n"
             "Инвайт код можно получить у администратора.\n\n"
             "Пример: `/login TRIAL7ABC123`",
-            parse_mode='Markdown'
+            parse_mode='HTML'
         )
         return ConversationHandler.END
     
@@ -144,7 +144,7 @@ async def login_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
             f"**подтвердите авторизацию** в диалоге Telegram!\n\n"
             f"⏰ QR код действителен 5 минут",
             reply_markup=keyboard,
-            parse_mode='Markdown'
+            parse_mode='HTML'
         )
         
         # Сохраняем session_id
@@ -168,7 +168,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text(
         "❌ Процесс авторизации отменен.\n\n"
         "Для повторной попытки используйте: `/login INVITE_CODE`",
-        parse_mode='Markdown'
+        parse_mode='HTML'
     )
     return ConversationHandler.END
 
@@ -224,11 +224,15 @@ async def subscription_command(update: Update, context: ContextTypes.DEFAULT_TYP
         if not is_active:
             text += f"\n⚠️ **Подписка истекла!** Обратитесь к администратору для продления."
         
-        await update.message.reply_text(text, parse_mode='Markdown')
+        await update.message.reply_text(text, parse_mode='HTML')
         
     except Exception as e:
         logger.error(f"Subscription command error: {e}")
-        await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+        from telegram_formatter import markdownify
+        await update.message.reply_text(
+            markdownify(f"❌ Ошибка: {str(e)}"),
+            parse_mode='HTML'
+        )
     finally:
         db.close()
 

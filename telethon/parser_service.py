@@ -107,36 +107,14 @@ class ParserService:
                     await asyncio.sleep(e.seconds)
                 except Exception as e:
                     error_msg = str(e)
-                    if "event loop must not change" in error_msg:
-                        logger.error(f"❌ ParserService: Ошибка event loop для @{channel.channel_username} - переподключение клиента")
-                        # Попробуем переподключить клиент
-                        try:
-                            await client.disconnect()
-                            await client.connect()
-                        except:
-                            pass
-                    else:
-                        logger.error(f"❌ ParserService: Ошибка парсинга @{channel.channel_username}: {error_msg}")
+                    logger.error(f"❌ ParserService: Ошибка парсинга @{channel.channel_username}: {error_msg}")
             
             return total_posts
             
         except Exception as e:
             logger.error(f"❌ ParserService: Ошибка парсинга каналов пользователя {user.telegram_id}: {str(e)}")
             return 0
-        finally:
-            # Очищаем клиент после парсинга чтобы избежать проблем с event loop
-            if client:
-                try:
-                    from secure_auth_manager import secure_auth_manager
-                    if user.id in secure_auth_manager.active_clients:
-                        try:
-                            await client.disconnect()
-                        except:
-                            pass
-                        del secure_auth_manager.active_clients[user.id]
-                    logger.debug(f"🧹 ParserService: Клиент пользователя {user.telegram_id} очищен")
-                except:
-                    pass
+        # НЕ УДАЛЯЕМ клиент! Он должен оставаться в том же event loop для последующих парсингов
     
     async def parse_channel_posts(self, channel: Channel, user, client, db):
         """Парсить посты для конкретного канала с использованием персонального клиента"""
@@ -217,6 +195,9 @@ class ParserService:
     async def parse_user_channels_by_id(self, user_id: int) -> dict:
         """Парсить каналы конкретного пользователя по ID"""
         db = SessionLocal()
+        # Сохраняем ID новых постов перед парсингом
+        new_post_ids_before = list(self.new_post_ids) if hasattr(self, 'new_post_ids') else []
+        
         try:
             user = db.query(User).filter(User.id == user_id).first()
             if not user:
@@ -226,6 +207,13 @@ class ParserService:
                 return {"error": "Пользователь не аутентифицирован"}
             
             posts_added = await self.parse_user_channels(user, db)
+            
+            # Запускаем фоновое тегирование для новых постов (как в parse_all_channels)
+            if self.new_post_ids and len(self.new_post_ids) > len(new_post_ids_before):
+                new_posts_count = len(self.new_post_ids) - len(new_post_ids_before)
+                logger.info(f"🏷️ ParserService: Запуск тегирования для {new_posts_count} новых постов")
+                asyncio.create_task(self._tag_new_posts_background())
+            
             return {
                 "user_id": user.id,
                 "telegram_id": user.telegram_id,
@@ -252,17 +240,15 @@ class ParserService:
     def run_parsing(self):
         """Запуск парсинга (для schedule)"""
         try:
-            # Проверяем, есть ли уже запущенный event loop
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # Если event loop уже запущен, создаем задачу
-                asyncio.create_task(self.parse_all_channels())
-            else:
-                # Если event loop не запущен, используем asyncio.run()
-                asyncio.run(self.parse_all_channels())
+            # КРИТИЧНО: НЕ используем asyncio.run() - это создает НОВЫЙ event loop!
+            # Telethon клиенты должны работать в ТОМ ЖЕ event loop где были созданы
+            # Просто создаем задачу в текущем running loop
+            loop = asyncio.get_running_loop()
+            asyncio.create_task(self.parse_all_channels())
+            logger.debug("📅 ParserService: Задача парсинга создана в текущем event loop")
         except RuntimeError:
-            # Если не можем получить event loop, создаем новый
-            asyncio.run(self.parse_all_channels())
+            # Если loop не запущен - логируем ошибку, schedule должен работать внутри loop!
+            logger.error("❌ ParserService: ОШИБКА! run_parsing() вызван ВНЕ event loop. Это не должно происходить!")
         except Exception as e:
             logger.error(f"❌ ParserService: Ошибка запуска парсинга: {str(e)}")
     
@@ -271,17 +257,12 @@ class ParserService:
         try:
             from cleanup_service import cleanup_service
             
-            # Проверяем, есть ли уже запущенный event loop
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # Если event loop уже запущен, создаем задачу
-                asyncio.create_task(cleanup_service.cleanup_old_posts())
-            else:
-                # Если event loop не запущен, используем asyncio.run()
-                asyncio.run(cleanup_service.cleanup_old_posts())
+            # КРИТИЧНО: НЕ используем asyncio.run() - работаем в текущем running loop
+            loop = asyncio.get_running_loop()
+            asyncio.create_task(cleanup_service.cleanup_old_posts())
+            logger.debug("📅 ParserService: Задача очистки создана в текущем event loop")
         except RuntimeError:
-            # Если не можем получить event loop, создаем новый
-            asyncio.run(cleanup_service.cleanup_old_posts())
+            logger.error("❌ ParserService: ОШИБКА! run_cleanup() вызван ВНЕ event loop. Это не должно происходить!")
         except Exception as e:
             logger.error(f"❌ ParserService: Ошибка запуска очистки: {str(e)}")
     
@@ -511,11 +492,20 @@ class ParserService:
 
 # Функция для запуска сервиса
 async def run_parser_service(interval_minutes=30):
-    """Запуск сервиса парсинга"""
+    """
+    Запуск сервиса парсинга
+    
+    ВАЖНО: Согласно Context7 Telethon best practices:
+    - asyncio.run() должен вызываться ТОЛЬКО ОДИН РАЗ для всего приложения
+    - Telethon клиенты НЕ МОГУТ работать если event loop изменился после подключения
+    - Все операции должны выполняться внутри одного event loop
+    """
     service = ParserService()
     await service.start_scheduler(interval_minutes)
 
 
 if __name__ == "__main__":
-    # Запуск сервиса парсинга
+    # КРИТИЧНО: asyncio.run() вызывается ОДИН РАЗ для создания главного event loop
+    # Все Telethon клиенты будут созданы и работать внутри этого loop
+    # Согласно Context7: "Only one call to asyncio.run() is needed for the entire application"
     asyncio.run(run_parser_service(30))  # Парсинг каждые 30 минут 

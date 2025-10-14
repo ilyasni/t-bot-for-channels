@@ -90,7 +90,7 @@ async def debug_group_digest_command(update: Update, context: ContextTypes.DEFAU
             await update.message.reply_text(
                 f"🔍 **DEBUG: RAW результат от n8n:**\n\n"
                 f"```json\n{raw_json[:3000]}\n```",
-                parse_mode='Markdown'
+                parse_mode='HTML'
             )
             
             # Показываем отформатированный
@@ -101,7 +101,7 @@ async def debug_group_digest_command(update: Update, context: ContextTypes.DEFAU
             
             await update.message.reply_text(
                 f"📝 **Отформатированный:**\n\n{formatted[:3000]}",
-                parse_mode='Markdown'
+                parse_mode='HTML'
             )
             
         except Exception as e:
@@ -144,9 +144,13 @@ async def debug_n8n_test_command(update: Update, context: ContextTypes.DEFAULT_T
             await update.message.reply_text(
                 f"✅ HTTP {response.status_code}\n\n"
                 f"```json\n{raw_json[:3000]}\n```",
-                parse_mode='Markdown'
+                parse_mode='HTML'
             )
             
     except Exception as e:
-        await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+        from telegram_formatter import markdownify
+        await update.message.reply_text(
+            markdownify(f"❌ Ошибка: {str(e)}"),
+            parse_mode='HTML'
+        )
 

@@ -49,7 +49,7 @@ async def admin_invite_command(update: Update, context: ContextTypes.DEFAULT_TYP
         "📝 **Создание инвайт кода**\n\n"
         "Выберите тип подписки:",
         reply_markup=reply_markup,
-        parse_mode='Markdown'
+        parse_mode='HTML'
     )
 
 
@@ -83,7 +83,7 @@ async def admin_invite_callback(update: Update, context: ContextTypes.DEFAULT_TY
             f"🎯 **Подписка:** {tier['name']}\n\n"
             f"⏰ Выберите срок действия инвайт кода:",
             reply_markup=reply_markup,
-            parse_mode='Markdown'
+            parse_mode='HTML'
         )
     
     elif data.startswith("expire_"):
@@ -145,7 +145,7 @@ async def create_invite_code(query, admin_telegram_id: int, subscription_type: s
         text += f"💡 Отправьте этот код пользователю:\n"
         text += f"`/login {code}`"
         
-        await query.edit_message_text(text, parse_mode='Markdown')
+        await query.edit_message_text(text, parse_mode='HTML')
         logger.info(f"✅ Админ {admin_telegram_id} создал инвайт код {code} ({subscription_type})")
         
     except Exception as e:
@@ -223,7 +223,7 @@ async def admin_users_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         
         text += f"\n💡 Для деталей: /admin_user <telegram_id>"
         
-        await update.message.reply_text(text, parse_mode='Markdown')
+        await update.message.reply_text(text, parse_mode='HTML')
         
     except Exception as e:
         logger.error(f"Ошибка в admin_users: {e}")
@@ -295,7 +295,7 @@ async def admin_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
             for h in history:
                 text += f"• {h.action}: {h.old_type} → {h.new_type} ({h.changed_at.strftime('%d.%m.%Y')})\n"
         
-        await update.message.reply_text(text, parse_mode='Markdown')
+        await update.message.reply_text(text, parse_mode='HTML')
         
     except Exception as e:
         logger.error(f"Ошибка в admin_user: {e}")
@@ -369,7 +369,7 @@ async def admin_grant_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text(
             f"✅ Подписка **{tier['name']}** выдана пользователю {target_user.first_name}\n"
             f"Срок: {days} дней",
-            parse_mode='Markdown'
+            parse_mode='HTML'
         )
         
         logger.info(f"✅ Админ {user.id} выдал подписку {subscription_type} пользователю {target_telegram_id}")
@@ -432,7 +432,7 @@ async def admin_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         text += f"• Всего создано: {total_invites}\n"
         text += f"• Использовано: {used_invites}\n"
         
-        await update.message.reply_text(text, parse_mode='Markdown')
+        await update.message.reply_text(text, parse_mode='HTML')
         
     except Exception as e:
         logger.error(f"Ошибка в admin_stats: {e}")
@@ -466,7 +466,7 @@ async def admin_panel_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text(
             "❌ **Доступ запрещен**\n\n"
             "Эта команда доступна только администраторам",
-            parse_mode='Markdown'
+            parse_mode='HTML'
         )
         return
     
@@ -477,7 +477,7 @@ async def admin_panel_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text(
             "❌ **Ошибка**\n\n"
             "Не удалось создать админ сессию. Попробуйте позже.",
-            parse_mode='Markdown'
+            parse_mode='HTML'
         )
         return
     
@@ -503,7 +503,7 @@ async def admin_panel_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         "• 📈 Графики и аналитика\n\n"
         "⏰ Session действует 1 час",
         reply_markup=keyboard,
-        parse_mode='Markdown'
+        parse_mode='HTML'
     )
     
     logger.info(f"👑 Админ {user.id} ({user.first_name}) открыл админ панель")

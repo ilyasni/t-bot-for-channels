@@ -28,6 +28,16 @@ from vector_db import qdrant_client
 from embeddings import embeddings_service
 from scheduler import digest_scheduler
 
+
+# Database dependency
+def get_db():
+    """FastAPI dependency для получения database session"""
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
 # Настройка логирования
 logging.basicConfig(
     level=getattr(logging, config.LOG_LEVEL),

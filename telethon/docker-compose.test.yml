@@ -1,0 +1,100 @@
+version: '3.8'
+
+# Docker Compose для запуска тестов
+# Использование: docker-compose -f docker-compose.test.yml up --build
+
+services:
+  # PostgreSQL для integration тестов
+  postgres-test:
+    image: postgres:15-alpine
+    container_name: postgres-test
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: test_telegram
+    ports:
+      - "5433:5432"  # Другой порт чтобы не конфликтовать с основной БД
+    tmpfs:
+      - /var/lib/postgresql/data  # In-memory для скорости
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+  
+  # Redis для integration тестов
+  redis-test:
+    image: redis:alpine
+    container_name: redis-test
+    ports:
+      - "6380:6379"  # Другой порт
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+  
+  # Telethon test runner (unit тесты)
+  telethon-test-unit:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    container_name: telethon-test-unit
+    command: pytest tests/ -m "unit" -v --tb=short --cov=. --cov-report=term-missing
+    volumes:
+      - ./tests:/app/tests
+      - ./htmlcov:/app/htmlcov
+    environment:
+      # Unit тесты используют SQLite in-memory, не требуют PostgreSQL
+      TELEGRAM_DATABASE_URL: "sqlite:///:memory:"
+      PYTHONPATH: /app:/app/rag_service
+      ENCRYPTION_KEY: "WX7wmC8298QkVh1acJr0h8roQ16M4am8qh1h4q35BqQ="
+      BOT_TOKEN: "test_bot_token"
+      MASTER_API_ID: "12345678"
+      MASTER_API_HASH: "test_api_hash"
+  
+  # Telethon test runner (integration тесты)
+  telethon-test-integration:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    container_name: telethon-test-integration
+    command: pytest tests/ -m "integration" -v --tb=short
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+      redis-test:
+        condition: service_healthy
+    volumes:
+      - ./tests:/app/tests
+    environment:
+      TELEGRAM_DATABASE_URL: postgresql://postgres:postgres@postgres-test:5432/test_telegram
+      REDIS_HOST: redis-test
+      REDIS_PORT: 6379
+      PYTHONPATH: /app:/app/rag_service
+  
+  # Telethon test runner (all тесты)
+  telethon-test-all:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    container_name: telethon-test-all
+    command: pytest tests/ -v --tb=short --cov=. --cov-report=html --cov-report=term-missing
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+      redis-test:
+        condition: service_healthy
+    volumes:
+      - ./tests:/app/tests
+      - ./htmlcov:/app/htmlcov
+    environment:
+      TELEGRAM_DATABASE_URL: postgresql://postgres:postgres@postgres-test:5432/test_telegram
+      REDIS_HOST: redis-test
+      REDIS_PORT: 6379
+      PYTHONPATH: /app:/app/rag_service
+
+volumes:
+  postgres-test-data:
+  redis-test-data:
+

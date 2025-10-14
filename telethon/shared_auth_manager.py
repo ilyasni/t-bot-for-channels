@@ -25,6 +25,11 @@ logger = logging.getLogger(__name__)
 logging.getLogger('telethon').setLevel(logging.DEBUG)
 
 
+class SecurityError(Exception):
+    """Ошибка безопасности (например, session file принадлежит другому пользователю)"""
+    pass
+
+
 class SharedAuthManager:
     """Менеджер авторизации с shared master credentials"""
     
@@ -462,6 +467,10 @@ class SharedAuthManager:
             
         Returns:
             TelegramClient или None
+            
+        ВАЖНО (Context7 best practices):
+        - Telethon клиент должен работать в ТОМ ЖЕ event loop где был создан
+        - НЕ пересоздаем клиента если он уже в правильном loop
         """
         lock = self._get_client_lock(telegram_id)
         
@@ -472,16 +481,26 @@ class SharedAuthManager:
                 
                 # ВАЖНО: Проверяем что клиент в правильном event loop
                 try:
-                    if client.is_connected():
-                        # Проверяем event loop
-                        current_loop = asyncio.get_event_loop()
-                        if client.loop != current_loop:
-                            logger.warning(f"⚠️ Client {telegram_id} в другом event loop - пересоздаем")
-                            await client.disconnect()
-                            del self.active_clients[telegram_id]
-                        else:
-                            return client
+                    current_loop = asyncio.get_running_loop()
+                    
+                    # Сравниваем event loops
+                    if client.loop != current_loop:
+                        logger.warning(
+                            f"⚠️ Client {telegram_id} создан в другом event loop!\n"
+                            f"   Client loop: {id(client.loop)}\n"
+                            f"   Current loop: {id(current_loop)}\n"
+                            f"   Это НЕ ДОЛЖНО происходить если приложение правильно использует asyncio.run() ОДИН РАЗ"
+                        )
+                        # Пересоздаем клиент в текущем loop
+                        await client.disconnect()
+                        del self.active_clients[telegram_id]
+                    elif client.is_connected():
+                        # Все ОК - используем существующий клиент
+                        logger.debug(f"♻️ Используем существующий клиент {telegram_id} в loop {id(current_loop)}")
+                        return client
                     else:
+                        # Клиент отключен - переподключаем
+                        logger.info(f"🔌 Переподключаем клиент {telegram_id}")
                         await client.connect()
                         if client.is_connected():
                             return client
@@ -491,6 +510,7 @@ class SharedAuthManager:
                         del self.active_clients[telegram_id]
             
             # Создаем новый клиент в текущем event loop
+            logger.info(f"🆕 Создаем НОВЫЙ клиент для {telegram_id}")
             client = await self._create_client(telegram_id)
             await client.connect()
             
@@ -508,8 +528,9 @@ class SharedAuthManager:
                 await client.disconnect()
                 raise SecurityError("Session file belongs to another user!")
             
+            current_loop = asyncio.get_running_loop()
             self.active_clients[telegram_id] = client
-            logger.info(f"✅ Client {telegram_id} создан в event loop {id(client.loop)}")
+            logger.info(f"✅ Client {telegram_id} создан и подключен в event loop {id(current_loop)}")
             return client
     
     async def disconnect_client(self, telegram_id: int):

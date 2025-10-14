@@ -63,7 +63,7 @@ OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 # RAG Settings
 # ============================================================================
 RAG_TOP_K = int(os.getenv("RAG_TOP_K", "10"))
-RAG_MIN_SCORE = float(os.getenv("RAG_MIN_SCORE", "0.7"))
+RAG_MIN_SCORE = float(os.getenv("RAG_MIN_SCORE", "0.5"))  # Понижено с 0.7 для лучшего поиска
 RAG_CONTEXT_WINDOW = int(os.getenv("RAG_CONTEXT_WINDOW", "4000"))
 RAG_TEMPERATURE = float(os.getenv("RAG_TEMPERATURE", "0.3"))
 

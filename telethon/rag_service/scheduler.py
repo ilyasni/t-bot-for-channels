@@ -222,7 +222,7 @@ class DigestScheduler:
                                 json={
                                     "chat_id": telegram_id,
                                     "text": message,
-                                    "parse_mode": "Markdown" if settings.format == "markdown" else None,
+                                    "parse_mode": "MarkdownV2" if settings.format == "markdown" else None,
                                     "disable_web_page_preview": True
                                 }
                             )

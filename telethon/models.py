@@ -2,11 +2,41 @@ from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean, Foreign
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from sqlalchemy import event
+from sqlalchemy.types import TypeDecorator
 from datetime import datetime, timezone
 import logging
 
 logger = logging.getLogger(__name__)
 Base = declarative_base()
+
+
+# Кастомный тип DateTime для автоматической обработки timezone
+class TZDateTime(TypeDecorator):
+    """
+    Timezone-aware DateTime тип для SQLAlchemy.
+    Автоматически конвертирует naive datetime в UTC при загрузке из БД.
+    Работает с PostgreSQL (хранит с timezone) и SQLite (хранит как naive, конвертирует при загрузке).
+    """
+    impl = DateTime
+    cache_ok = True
+    
+    def process_bind_param(self, value, dialect):
+        """При сохранении в БД"""
+        if value is not None:
+            if value.tzinfo is None:
+                # Если naive - предполагаем UTC
+                logger.warning(f"Naive datetime encountered, assuming UTC: {value}")
+                return value.replace(tzinfo=timezone.utc)
+            # Конвертируем в UTC если не UTC
+            return value.astimezone(timezone.utc).replace(tzinfo=None) if dialect.name == 'sqlite' else value.astimezone(timezone.utc)
+        return value
+    
+    def process_result_value(self, value, dialect):
+        """При загрузке из БД"""
+        if value is not None and value.tzinfo is None:
+            # Для SQLite добавляем UTC timezone
+            return value.replace(tzinfo=timezone.utc)
+        return value
 
 # Промежуточная таблица для связи многие-ко-многим между User и Channel
 user_channel = Table(
@@ -15,8 +45,8 @@ user_channel = Table(
     Column('user_id', Integer, ForeignKey('users.id', ondelete='CASCADE'), primary_key=True),
     Column('channel_id', Integer, ForeignKey('channels.id', ondelete='CASCADE'), primary_key=True),
     Column('is_active', Boolean, default=True),  # Активность подписки конкретного пользователя
-    Column('created_at', DateTime, default=lambda: datetime.now(timezone.utc)),
-    Column('last_parsed_at', DateTime, nullable=True)  # Время последнего парсинга для этого пользователя
+    Column('created_at', TZDateTime, default=lambda: datetime.now(timezone.utc)),
+    Column('last_parsed_at', TZDateTime, nullable=True)  # Время последнего парсинга для этого пользователя
 )
 
 # Промежуточная таблица для связи многие-ко-многим между User и Group
@@ -27,7 +57,7 @@ user_group = Table(
     Column('group_id', Integer, ForeignKey('groups.id', ondelete='CASCADE'), primary_key=True),
     Column('is_active', Boolean, default=True),  # Активность мониторинга группы
     Column('mentions_enabled', Boolean, default=True),  # Уведомления об упоминаниях в этой группе
-    Column('created_at', DateTime, default=lambda: datetime.now(timezone.utc))
+    Column('created_at', TZDateTime, default=lambda: datetime.now(timezone.utc))
 )
 
 class User(Base):
@@ -38,7 +68,7 @@ class User(Base):
     username = Column(String, nullable=True)
     first_name = Column(String, nullable=True)
     last_name = Column(String, nullable=True)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(TZDateTime, default=lambda: datetime.now(timezone.utc))
     is_active = Column(Boolean, default=True)
     
     # Настройки хранения постов
@@ -50,28 +80,28 @@ class User(Base):
     phone_number = Column(Text, nullable=True)  # Номер телефона пользователя (зашифрован)
     session_file = Column(String, nullable=True)  # Путь к файлу сессии
     is_authenticated = Column(Boolean, default=False)  # Статус аутентификации
-    last_auth_check = Column(DateTime, nullable=True)  # Время последней проверки аутентификации
+    last_auth_check = Column(TZDateTime, nullable=True)  # Время последней проверки аутентификации
     auth_error = Column(Text, nullable=True)  # Последняя ошибка аутентификации
     
     # Новые поля для безопасной аутентификации
     auth_session_id = Column(String, nullable=True)  # ID сессии аутентификации
-    auth_session_expires = Column(DateTime, nullable=True)  # Время истечения сессии
+    auth_session_expires = Column(TZDateTime, nullable=True)  # Время истечения сессии
     failed_auth_attempts = Column(Integer, default=0)  # Количество неудачных попыток
-    last_auth_attempt = Column(DateTime, nullable=True)  # Время последней попытки
+    last_auth_attempt = Column(TZDateTime, nullable=True)  # Время последней попытки
     is_blocked = Column(Boolean, default=False)  # Заблокирован ли пользователь
-    block_expires = Column(DateTime, nullable=True)  # Время окончания блокировки
+    block_expires = Column(TZDateTime, nullable=True)  # Время окончания блокировки
     
     # Роли и подписки (новая система авторизации)
     role = Column(String, default="user")  # admin, user
     subscription_type = Column(String, default="free")  # free, trial, basic, premium, enterprise
-    subscription_expires = Column(DateTime, nullable=True)
-    subscription_started_at = Column(DateTime, nullable=True)
+    subscription_expires = Column(TZDateTime, nullable=True)
+    subscription_started_at = Column(TZDateTime, nullable=True)
     max_channels = Column(Integer, default=3)  # Лимит каналов по подписке
     invited_by = Column(Integer, ForeignKey("users.id"), nullable=True)  # Кто пригласил
     
     # Voice transcription statistics (Premium/Enterprise feature)
     voice_queries_today = Column(Integer, default=0)  # Голосовых запросов сегодня
-    voice_queries_reset_at = Column(DateTime(timezone=True), nullable=True)  # Время сброса счетчика
+    voice_queries_reset_at = Column(TZDateTime, nullable=True)  # Время сброса счетчика
     
     # Связи
     channels = relationship(
@@ -261,7 +291,7 @@ class Channel(Base):
     channel_username = Column(String, unique=True, nullable=False, index=True)  # Уникальный username канала
     channel_id = Column(BigInteger, unique=True, nullable=True, index=True)  # Telegram ID канала
     channel_title = Column(String, nullable=True)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(TZDateTime, default=lambda: datetime.now(timezone.utc))
     
     # Связи
     users = relationship(
@@ -318,6 +348,7 @@ class Channel(Base):
         """
         if user not in self.users:
             self.users.append(user)
+            db.flush()  # Flush чтобы запись появилась в БД перед UPDATE
             # Установим is_active через прямой SQL
             db.execute(
                 user_channel.update().where(
@@ -399,8 +430,8 @@ class Post(Base):
     text = Column(Text, nullable=True)
     views = Column(Integer, nullable=True)
     url = Column(String, nullable=True)
-    posted_at = Column(DateTime, nullable=False)
-    parsed_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    posted_at = Column(TZDateTime, nullable=False)
+    parsed_at = Column(TZDateTime, default=lambda: datetime.now(timezone.utc))
     tags = Column(JSON, nullable=True)  # Массив тегов в формате JSON ["технологии", "новости"]
     
     # Обогащенный контент (текст + контент из ссылок)
@@ -409,7 +440,7 @@ class Post(Base):
     # Поля для отслеживания тегирования
     tagging_status = Column(String, default="pending")  # pending, success, failed, retrying
     tagging_attempts = Column(Integer, default=0)  # Количество попыток тегирования
-    last_tagging_attempt = Column(DateTime, nullable=True)  # Время последней попытки
+    last_tagging_attempt = Column(TZDateTime, nullable=True)  # Время последней попытки
     tagging_error = Column(Text, nullable=True)  # Последняя ошибка тегирования
     
     # Связи
@@ -442,8 +473,8 @@ class DigestSettings(Base):
     email = Column(String, nullable=True)
     
     # История
-    last_sent_at = Column(DateTime, nullable=True)
-    next_scheduled_at = Column(DateTime, nullable=True)
+    last_sent_at = Column(TZDateTime, nullable=True)
+    next_scheduled_at = Column(TZDateTime, nullable=True)
     
     # AI Summarization
     ai_summarize = Column(Boolean, default=False)  # Включить AI-суммаризацию
@@ -463,7 +494,7 @@ class IndexingStatus(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     post_id = Column(Integer, ForeignKey("posts.id"), nullable=False, index=True)
     
-    indexed_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    indexed_at = Column(TZDateTime, default=lambda: datetime.now(timezone.utc))
     vector_id = Column(String, nullable=True)  # ID в Qdrant
     status = Column(String, default="success", index=True)  # success, failed, pending
     error = Column(Text, nullable=True)
@@ -485,7 +516,7 @@ class RAGQueryHistory(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     query = Column(Text, nullable=False)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+    created_at = Column(TZDateTime, default=lambda: datetime.now(timezone.utc), index=True)
     
     # Извлеченные темы/ключевые слова из запроса
     extracted_topics = Column(JSON, nullable=True)
@@ -502,7 +533,7 @@ class Group(Base):
     group_id = Column(BigInteger, unique=True, nullable=False, index=True)  # Telegram ID группы
     group_title = Column(String, nullable=True)
     group_username = Column(String, nullable=True, index=True)  # Username группы (если есть)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(TZDateTime, default=lambda: datetime.now(timezone.utc))
     
     # Many-to-many с пользователями
     users = relationship(
@@ -557,6 +588,7 @@ class Group(Base):
         """
         if user not in self.users:
             self.users.append(user)
+            db.flush()  # Flush чтобы запись появилась в БД перед UPDATE
             # Установим настройки через прямой SQL
             db.execute(
                 user_group.update().where(
@@ -587,7 +619,7 @@ class GroupMention(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     group_id = Column(Integer, ForeignKey("groups.id"), nullable=False, index=True)
     message_id = Column(BigInteger, nullable=False)
-    mentioned_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+    mentioned_at = Column(TZDateTime, default=lambda: datetime.now(timezone.utc), index=True)
     
     # AI-анализ упоминания
     context = Column(Text, nullable=True)  # Контекст разговора
@@ -596,7 +628,7 @@ class GroupMention(Base):
     
     # Статус уведомления
     notified = Column(Boolean, default=False)
-    notified_at = Column(DateTime, nullable=True)
+    notified_at = Column(TZDateTime, nullable=True)
     
     # Связи
     user = relationship("User")
@@ -633,12 +665,12 @@ class InviteCode(Base):
     
     code = Column(String, primary_key=True, index=True)  # INVITE2024ABC
     created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(TZDateTime, default=lambda: datetime.now(timezone.utc))
     
     used_by = Column(Integer, ForeignKey("users.id"), nullable=True)
-    used_at = Column(DateTime, nullable=True)
+    used_at = Column(TZDateTime, nullable=True)
     
-    expires_at = Column(DateTime, nullable=False)  # Срок действия кода
+    expires_at = Column(TZDateTime, nullable=False)  # Срок действия кода
     max_uses = Column(Integer, default=1)  # Сколько раз можно использовать
     uses_count = Column(Integer, default=0)  # Сколько раз использован
     
@@ -698,7 +730,7 @@ class SubscriptionHistory(Base):
     new_type = Column(String, nullable=False)
     
     changed_by = Column(Integer, ForeignKey("users.id"), nullable=True)  # Админ который изменил
-    changed_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+    changed_at = Column(TZDateTime, default=lambda: datetime.now(timezone.utc), index=True)
     
     notes = Column(Text, nullable=True)
     

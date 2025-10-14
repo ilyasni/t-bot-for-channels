@@ -93,15 +93,29 @@ class TelegramSystem:
         except Exception as e:
             logger.error(f"❌ Ошибка запуска мониторинга групп: {str(e)}")
     
-    def start_api(self):
-        """Запуск API сервера"""
+    def start_api(self, main_loop):
+        """
+        Запуск API сервера
+        
+        Args:
+            main_loop: Главный event loop где работают Telethon клиенты
+        """
         try:
-            from main import app
+            import main
+            
+            # КРИТИЧНО: Передаем parser_service И главный event loop в API
+            # API работает в отдельном потоке (uvicorn), но должен отправлять задачи в главный loop
+            # где живут Telethon клиенты (Context7 best practices)
+            main.global_parser_service = self.parser_service
+            main.main_event_loop = main_loop
+            logger.info("✅ ParserService и главный event loop переданы в API")
+            logger.info(f"   Main event loop ID: {id(main_loop)}")
+            
             host = os.getenv("HOST", "0.0.0.0")
             port = int(os.getenv("PORT", 8010))
             
             logger.info(f"🌐 Запуск API сервера на {host}:{port}...")
-            uvicorn.run(app, host=host, port=port)
+            uvicorn.run(main.app, host=host, port=port)
         except Exception as e:
             logger.error(f"❌ Ошибка запуска API: {str(e)}")
     
@@ -130,8 +144,13 @@ class TelegramSystem:
         asyncio.create_task(self.start_group_monitor())
         logger.info("👀 Group Monitor запущен в async task")
         
-        # Запускаем API в отдельном потоке
-        api_thread = threading.Thread(target=self.start_api, daemon=True)
+        # КРИТИЧНО: Получаем текущий event loop (главный loop где работают клиенты)
+        main_loop = asyncio.get_running_loop()
+        logger.info(f"🔄 Главный event loop ID: {id(main_loop)}")
+        
+        # Запускаем API в отдельном потоке, передаем главный loop
+        # API будет отправлять задачи парсинга обратно в этот loop через run_coroutine_threadsafe
+        api_thread = threading.Thread(target=self.start_api, args=(main_loop,), daemon=True)
         api_thread.start()
         
         # Запускаем веб-сервер аутентификации в отдельном потоке
@@ -180,15 +199,8 @@ if __name__ == "__main__":
     print("📱 Парсинг работает с персональными клиентами пользователей")
     print("=" * 70)
     
-    try:
-        # Проверяем, есть ли уже запущенный event loop
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # Если event loop уже запущен, создаем задачу
-            asyncio.create_task(main())
-        else:
-            # Если event loop не запущен, используем asyncio.run()
-            asyncio.run(main())
-    except RuntimeError:
-        # Если не можем получить event loop, создаем новый
-        asyncio.run(main()) 
+    # КРИТИЧНО (Context7 best practices):
+    # asyncio.run() вызывается ТОЛЬКО ОДИН РАЗ - это создает главный event loop
+    # Все Telethon клиенты будут работать внутри этого loop
+    # Согласно Telethon docs: "Only one call to asyncio.run() is needed for the entire application"
+    asyncio.run(main()) 

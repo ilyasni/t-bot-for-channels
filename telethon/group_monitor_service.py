@@ -325,7 +325,7 @@ class GroupMonitorService:
             await client.send_message(
                 user_telegram_id,
                 notification,
-                parse_mode='markdown'
+                parse_mode='HTML'
             )
             
             logger.info(f"📬 Уведомление отправлено пользователю {user_telegram_id}")

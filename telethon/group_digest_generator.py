@@ -9,7 +9,7 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta, timezone
 from telethon.tl.types import Message
 from dotenv import load_dotenv
-from markdown_utils import escape_markdown_v2
+import telegram_formatter
 
 load_dotenv()
 
@@ -209,56 +209,17 @@ class GroupDigestGenerator:
         """
         Форматирует дайджест для отправки в Telegram
         
+        Делегирует форматирование в telegram_formatter для автоматической
+        конвертации Markdown → MarkdownV2 с правильным экранированием.
+        
         Args:
             digest: Результат от generate_digest()
             group_title: Название группы
             
         Returns:
-            Отформатированное сообщение в Markdown
+            Отформатированное сообщение в MarkdownV2
         """
-        lines = []
-        
-        # Экранируем спецсимволы Markdown в названии группы
-        safe_title = escape_markdown_v2(group_title)
-        
-        # Заголовок
-        lines.append(f"# 📊 Дайджест группы: {safe_title}")
-        lines.append(f"**Период:** {digest.get('period', 'unknown')}")
-        lines.append(f"**Сообщений проанализировано:** {digest.get('message_count', 0)}")
-        lines.append("")
-        
-        # Темы
-        topics = digest.get('topics', [])
-        if topics:
-            lines.append("## 🎯 Основные темы:")
-            for i, topic in enumerate(topics, 1):
-                safe_topic = escape_markdown_v2(str(topic))
-                lines.append(f"{i}\\. {safe_topic}")
-            lines.append("")
-        
-        # Спикеры
-        speakers = digest.get('speakers_summary', {})
-        if speakers:
-            lines.append("## 👥 Активные участники:")
-            for username, summary in speakers.items():
-                safe_username = escape_markdown_v2(str(username))
-                safe_summary = escape_markdown_v2(str(summary))
-                lines.append(f"• @{safe_username}: {safe_summary}")
-            lines.append("")
-        
-        # Общее резюме
-        overall = digest.get('overall_summary', '')
-        if overall:
-            lines.append("## 📝 Резюме:")
-            safe_overall = escape_markdown_v2(str(overall))
-            lines.append(safe_overall)
-            lines.append("")
-        
-        # Футер
-        lines.append("\\-\\-\\-")
-        lines.append(f"*Дайджест сгенерирован AI \\(GigaChat Multi\\-Agent\\) • {datetime.now().strftime('%d.%m.%Y %H:%M')}*")
-        
-        return "\n".join(lines)
+        return telegram_formatter.format_digest_for_telegram(digest, group_title)
     
     def format_mention_for_telegram(
         self, 
@@ -269,64 +230,38 @@ class GroupDigestGenerator:
         """
         Форматирует анализ упоминания для уведомления в Telegram
         
+        Делегирует форматирование в telegram_formatter для автоматической
+        конвертации Markdown → MarkdownV2 с правильным экранированием.
+        
         Args:
             analysis: Результат от analyze_mention()
             group_title: Название группы
             message_link: Ссылка на сообщение (опционально)
             
         Returns:
-            Отформатированное сообщение в Markdown
+            Отформатированное сообщение в MarkdownV2
         """
-        urgency_emoji = {
-            "low": "🟢",
-            "medium": "🟡",
-            "high": "🔴"
+        # Маппинг urgency для совместимости с telegram_formatter
+        urgency_mapping = {
+            "low": "normal",
+            "medium": "important",
+            "high": "urgent"
         }
         
-        urgency = analysis.get('urgency', 'medium')
-        emoji = urgency_emoji.get(urgency, '🟡')
+        # Создаем копию analysis с нормализованным urgency
+        normalized_analysis = analysis.copy()
+        old_urgency = normalized_analysis.get('urgency', 'medium')
+        normalized_analysis['urgency'] = urgency_mapping.get(old_urgency, 'important')
         
-        lines = []
+        # Маппинг полей для совместимости
+        if 'context_summary' in normalized_analysis:
+            normalized_analysis['context'] = normalized_analysis.pop('context_summary')
         
-        # Экранируем спецсимволы Markdown в названии группы
-        safe_title = escape_markdown_v2(group_title)
-        
-        # Заголовок
-        lines.append(f"{emoji} **Вас упомянули в группе: {safe_title}**")
-        lines.append("")
-        
-        # Контекст
-        context = analysis.get('context_summary', '')
-        if context:
-            safe_context = escape_markdown_v2(str(context))
-            lines.append(f"**Контекст:** {safe_context}")
-            lines.append("")
-        
-        # Причина
-        reason = analysis.get('mention_reason', '')
-        if reason:
-            safe_reason = escape_markdown_v2(str(reason))
-            lines.append(f"**Почему упомянули:** {safe_reason}")
-            lines.append("")
-        
-        # Ключевые моменты
-        key_points = analysis.get('key_points', [])
-        if key_points:
-            lines.append("**Ключевые моменты:**")
-            for point in key_points:
-                safe_point = escape_markdown_v2(str(point))
-                lines.append(f"• {safe_point}")
-            lines.append("")
-        
-        # Ссылка на сообщение
-        if message_link:
-            lines.append(f"[Перейти к сообщению]({message_link})")
-            lines.append("")
-        
-        # Футер
-        lines.append(f"*Срочность: {urgency.upper()} • {datetime.now().strftime('%H:%M')}*")
-        
-        return "\n".join(lines)
+        return telegram_formatter.format_mention_for_telegram(
+            normalized_analysis,
+            group_title,
+            message_link
+        )
 
 
 # Глобальный экземпляр

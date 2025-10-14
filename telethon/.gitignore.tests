@@ -1,0 +1,17 @@
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+*.cover
+coverage.xml
+
+# Test databases
+test_*.db
+test_*.sqlite
+
+# Test persistence
+data/bot_persistence.pkl
+
+# pytest temp files
+.pytest_tmp*/
