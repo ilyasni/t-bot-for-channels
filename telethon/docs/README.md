@@ -1,161 +1,185 @@
-# 📚 Документация Telegram Channel Parser + RAG System
+# 📚 Telegram Bot Documentation
 
-**Версия:** 2.2.1  
-**Последнее обновление:** 11 октября 2025
-
----
+Централизованная документация проекта Telegram Channel Parser Bot.
 
 ## 🚀 Быстрый старт
 
-**Навигация по всей документации:**
-- [DOCUMENTATION_GUIDE.md](DOCUMENTATION_GUIDE.md) - Полная справка
-- [NAVIGATION_CHEATSHEET.md](NAVIGATION_CHEATSHEET.md) - Quick links ← Начните здесь!
+| Я хочу... | Перейти к документу |
+|-----------|---------------------|
+| 🆕 Начать с нуля | [guides/START_HERE.md](guides/START_HERE.md) |
+| 🎨 Использовать HTML форматирование | [formatting/HTML_FORMAT_EXAMPLES.md](formatting/HTML_FORMAT_EXAMPLES.md) ⭐ |
+| 🚀 Задеплоить изменения | [formatting/DEPLOYMENT_GUIDE.md](formatting/DEPLOYMENT_GUIDE.md) |
+| 🧪 Запустить тесты | [testing/TESTING_GUIDE.md](testing/TESTING_GUIDE.md) |
+| ⚡ Быстрая настройка | [quickstart/QUICK_START.md](quickstart/QUICK_START.md) |
+| 🔍 Настроить RAG | [quickstart/RAG_QUICKSTART.md](quickstart/RAG_QUICKSTART.md) |
+| 🔐 Настроить QR Login | [quickstart/QR_LOGIN_GUIDE.md](quickstart/QR_LOGIN_GUIDE.md) |
 
-### Новые пользователи
-1. [QUICK_START.md](quickstart/QUICK_START.md) - Основной Parser
-2. [RAG_QUICKSTART.md](quickstart/RAG_QUICKSTART.md) - RAG система и AI-дайджесты
+## 📂 Структура документации
 
-### Для тестирования
-1. [telethon/TESTING_GUIDE.md](../TESTING_GUIDE.md) - Полное руководство (14 сценариев)
-2. [telethon/QUICK_REFERENCE.md](../QUICK_REFERENCE.md) - Шпаргалка по командам
+### 🎨 [formatting/](formatting/) - HTML Форматирование (NEW!)
+- **HTML_FORMATTING_COMPLETE.md** ⭐ - Полная документация (12KB)
+- **HTML_FORMAT_EXAMPLES.md** ⭐ - 10 примеров использования (13KB)
+- **DEPLOYMENT_GUIDE.md** ⭐ - Deployment инструкции (10KB)
 
----
+**Новое в v3.3.0:**
+- Blockquote и expandable blockquote
+- Spoilers `<tg-spoiler>`
+- Code blocks с подсветкой языка
+- RAG ответы с expandable источниками
+- Умные дайджесты с auto-expandable
 
-## 📁 Структура документации
+### ✨ [features/](features/) - Функциональность
+- **GROUPS_FEATURE_README.md** - Groups мониторинг и дайджесты
+- **TAGGING_INDEXING_VERIFICATION.md** - Автоматическое тегирование
+- **SUBSCRIPTIONS.md** - Система подписок (Trial/Premium/Enterprise)
+- **[rag/](features/rag/)** - RAG система и векторный поиск
+- **[voice/](features/voice/)** - Голосовые команды (SaluteSpeech)
+- **[groups/](features/groups/)** - Groups дайджесты через n8n
 
-### 📘 `/quickstart/` - Быстрые старты
+### 📖 [guides/](guides/) - Руководства
+- **START_HERE.md** - Полное руководство для новичков
+- **QUICK_REFERENCE.md** - Быстрый справочник по командам
+- **COMMANDS_CHEATSHEET.md** - Шпаргалка по всем командам бота
+- **DOCKER_TESTING.md** - Тестирование в Docker окружении
+
+### 🧪 [testing/](testing/) - Тестирование
+- **TESTING_GUIDE.md** - Полное руководство по тестированию
+- **TEST_SUITE_SUMMARY.md** - Сводка по test suite
+- **TESTING.md** - Базовые инструкции
+- **README_TESTS.md** - Документация тестов
+
+**Статус:** ✅ 42/42 тестов проходят
+
+### ⚡ [quickstart/](quickstart/) - Быстрые старты
+- **QUICK_START.md** - Быстрый старт проекта
+- **RAG_QUICKSTART.md** - Настройка RAG за 5 минут
+- **QR_LOGIN_GUIDE.md** - Настройка QR аутентификации
+- **ADMIN_PANEL_QUICKSTART.md** - Админ панель через Mini App
+
+### 🔧 [troubleshooting/](troubleshooting/) - Решение проблем
+- **CONNECTION_TROUBLESHOOTING.md** - Проблемы подключения
+- **RATE_LIMIT_429.md** - Rate limit ошибки
+- **GIGACHAT_MODEL_CHECK.md** - Проблемы с GigaChat
+- **QR_LOGIN_2FA_ISSUE.md** - Проблемы с 2FA
+- **TIMEZONE_FIX.md** - Проблемы с timezone
+
+### 🗄️ [migrations/](migrations/) - Миграции БД
+- **README_MIGRATION.md** - Руководство по миграциям
+- **MIGRATION_MANY_TO_MANY.md** - Many-to-many relationships
+- **MIGRATION_SUPABASE.md** - Интеграция с Supabase
+
+### 📦 [archive/](archive/) - Архив
+Исторические документы, старые отчёты и миграции.  
+**Не для повседневного использования.**
+
+## 📝 Актуальная документация (v3.3.0)
+
+| Документ | Версия | Статус | Описание |
+|----------|--------|--------|----------|
+| **HTML_FORMATTING_COMPLETE.md** | 1.0 | ✅ Актуально | Полная документация HTML форматирования |
+| **HTML_FORMAT_EXAMPLES.md** | 1.0 | ✅ Актуально | 10 практических примеров |
+| **DEPLOYMENT_GUIDE.md** | 1.0 | ✅ Актуально | Production deployment guide |
+| TESTING_GUIDE.md | 3.3 | ✅ Актуально | Руководство по тестированию |
+| GROUPS_FEATURE_README.md | 1.0 | ✅ Актуально | Groups мониторинг |
+| RAG_QUICKSTART.md | 1.2 | ✅ Актуально | RAG setup guide |
+
+## 🔍 Навигация по темам
+
+### Разработка
+- [START_HERE.md](guides/START_HERE.md) - Начало работы
+- [QUICK_REFERENCE.md](guides/QUICK_REFERENCE.md) - Справочник
+- [TESTING_GUIDE.md](testing/TESTING_GUIDE.md) - Тестирование
+
+### Форматирование
+- [HTML_FORMAT_EXAMPLES.md](formatting/HTML_FORMAT_EXAMPLES.md) - Примеры HTML
+- [HTML_FORMATTING_COMPLETE.md](formatting/HTML_FORMATTING_COMPLETE.md) - Полная документация
+- [DEPLOYMENT_GUIDE.md](formatting/DEPLOYMENT_GUIDE.md) - Деплой
+
+### Функции
+- [GROUPS_FEATURE_README.md](features/GROUPS_FEATURE_README.md) - Groups
+- [features/rag/README.md](features/rag/README.md) - RAG система
+- [features/voice/README.md](features/voice/README.md) - Голосовые команды
+
+### Troubleshooting
+- [CONNECTION_TROUBLESHOOTING.md](troubleshooting/CONNECTION_TROUBLESHOOTING.md) - Подключение
+- [RATE_LIMIT_429.md](troubleshooting/RATE_LIMIT_429.md) - Rate limits
+- [GIGACHAT_MODEL_CHECK.md](troubleshooting/GIGACHAT_MODEL_CHECK.md) - GigaChat
+
+## 🎯 Рекомендуемый путь изучения
+
+**Для новичков:**
+1. [guides/START_HERE.md](guides/START_HERE.md)
+2. [quickstart/QUICK_START.md](quickstart/QUICK_START.md)
+3. [guides/COMMANDS_CHEATSHEET.md](guides/COMMANDS_CHEATSHEET.md)
+4. [testing/TESTING_GUIDE.md](testing/TESTING_GUIDE.md)
+
+**Для HTML форматирования:**
+1. [formatting/HTML_FORMAT_EXAMPLES.md](formatting/HTML_FORMAT_EXAMPLES.md) ⭐
+2. [formatting/HTML_FORMATTING_COMPLETE.md](formatting/HTML_FORMATTING_COMPLETE.md)
+3. [formatting/DEPLOYMENT_GUIDE.md](formatting/DEPLOYMENT_GUIDE.md)
+
+**Для настройки фич:**
+1. [quickstart/RAG_QUICKSTART.md](quickstart/RAG_QUICKSTART.md)
+2. [quickstart/QR_LOGIN_GUIDE.md](quickstart/QR_LOGIN_GUIDE.md)
+3. [features/GROUPS_FEATURE_README.md](features/GROUPS_FEATURE_README.md)
+
+## 🆕 Последние обновления
+
+### 14.10.2025 - HTML Formatting v1.0
+- ✅ Полная поддержка Telegram HTML тегов
+- ✅ Expandable blockquote для длинного контента
+- ✅ Spoilers и code blocks с языками
+- ✅ RAG ответы с expandable источниками
+- ✅ 42/42 тестов проходят
+- ✅ Production ready
+
+### Архивировано
+- Markdown миграция документы → [archive/](archive/)
+- Старые отчёты по тестам → [archive/testing/](archive/testing/)
+- Исторические summaries → [archive/](archive/)
+
+## 💡 Полезные команды
+
+```bash
+# Найти документ по ключевому слову
+cd /home/ilyasni/n8n-server/n8n-installer/telethon/docs
+grep -r "blockquote" .
+
+# Список всех md файлов
+find . -name "*.md" | sort
+
+# Поиск по содержимому
+grep -r "example" . --include="*.md"
 ```
-QUICK_START.md              - Основной Parser (аутентификация, каналы, API)
-RAG_QUICKSTART.md           - RAG система (поиск, дайджесты, AI)
-RAG_SYSTEM_READY.md         - Статус готовности RAG
-QUICK_MIGRATION.md          - Миграция данных
-QUICK_START_RETENTION.md    - Система хранения постов
-QUICK_START_TAGGING.md      - AI тегирование
-```
-
-### 🔧 `/features/` - Функции системы
-
-**Основные функции:**
-```
-RETENTION_README.md         - Автоочистка старых постов
-TAGGING_README.md           - AI-тегирование (OpenRouter/GigaChat)
-TAGGING_RETRY_SYSTEM.md     - Retry механизм для тегирования
-TAGGING_AND_INDEXING_WORKFLOW.md - Workflow тегирования и индексации
-README_SECURE.md            - Безопасная аутентификация
-IMPLEMENTATION_SUMMARY.md   - Общая сводка
-MANY_TO_MANY_SUMMARY.md     - Many-to-Many архитектура
-```
-
-**Docker:**
-```
-DOCKER_README.md            - Запуск в Docker
-DOCKER_RETENTION_SETUP.md   - Настройка retention в Docker
-```
-
-**Интеграции:**
-```
-OPENWEBUI_INTEGRATION.md    - Интеграция с Open WebUI (опционально)
-```
-
-### 🤖 `/features/rag/` - RAG System
-
-**RAG документация:**
-```
-README.md                   - Навигация по RAG docs
-BOT_RAG_COMMANDS.md         - Описание команд бота (/ask, /search, /recommend, /digest)
-RAG_IMPLEMENTATION_SUMMARY.md - Технические детали реализации
-RAG_DEPLOYMENT_SUMMARY.md   - Развертывание RAG
-RAG_CHECKLIST.md            - Чеклист проверки
-DOCKER_DEPLOYMENT_ORDER.md  - Порядок запуска сервисов
-```
-
-**AI Digests:**
-```
-AI_DIGEST_GUIDE.md          - Руководство по AI-дайджестам
-AI_DIGEST_IMPLEMENTATION_SUMMARY.md - Технические детали
-AI_DIGEST_FINAL_REPORT.md   - Финальный отчет
-DIGEST_EXPLANATION.md       - Объяснение работы дайджестов
-```
-
-### 🔄 `/migrations/` - Миграции БД
-```
-README_MIGRATION.md         - Общее руководство
-MIGRATION_MANY_TO_MANY.md   - Переход на Many-to-Many
-MIGRATION_SUPABASE.md       - Миграция на Supabase
-MIGRATION_FILES_LIST.md     - Список скриптов миграций
-```
-
-### 🐛 `/troubleshooting/` - Решение проблем
-```
-CONNECTION_TROUBLESHOOTING.md - Проблемы подключения
-SUPABASE_INTEGRATION.md      - Интеграция с Supabase
-TIMEZONE_FIX.md              - Исправление таймзон
-GIGACHAT_MODEL_CHECK.md      - Проверка моделей GigaChat
-GIGACHAT_PRO_FIX.md          - Исправления GigaChat
-RATE_LIMIT_429.md            - Обработка rate limits
-```
-
-### 📦 `/archive/` - Архивные материалы
-
-**Отчеты о разработке:**
-- `/archive/reports/` - Временные отчеты о реализации (11 файлов)
-- `/archive/testing/` - Тестовые отчеты (4 файла)
-- `/archive/` - Старые технические документы (10 файлов)
-
----
-
-## 🎯 Навигация по задачам
-
-### Я хочу начать работу с системой
-→ [quickstart/QUICK_START.md](quickstart/QUICK_START.md)
-
-### Я хочу использовать RAG и AI-дайджесты
-→ [quickstart/RAG_QUICKSTART.md](quickstart/RAG_QUICKSTART.md)
-
-### Я хочу протестировать новые команды
-→ [../TESTING_GUIDE.md](../TESTING_GUIDE.md)
-
-### Мне нужна шпаргалка по командам
-→ [../QUICK_REFERENCE.md](../QUICK_REFERENCE.md)
-
-### Я хочу настроить AI-тегирование
-→ [features/TAGGING_README.md](features/TAGGING_README.md)
-
-### Мне нужно выполнить миграцию БД
-→ [migrations/README_MIGRATION.md](migrations/README_MIGRATION.md)
-
-### У меня проблемы с подключением/сервисами
-→ [troubleshooting/](troubleshooting/)
-
-### Я разработчик, нужны технические детали RAG
-→ [features/rag/README.md](features/rag/README.md)
-
----
 
 ## 📊 Статистика документации
 
-**Всего:** ~64 MD файла (42 актуальных + 25 архивных)
-- Быстрые старты: 6
-- Функции: 19 (RAG: 10, основные: 8, Docker: 2, интеграции: 1)
-- Миграции: 4
-- Troubleshooting: 6
-- Документация (guides): 2
-- Архив: 25 (reports: 11, testing: 4, technical: 10)
+- **Всего документов:** ~150
+- **Актуальных:** ~25
+- **Архивных:** ~125
+- **Категорий:** 8
+- **Языков:** Русский/English
+- **Формат:** Markdown (.md)
+
+## 🤝 Контрибьюторы
+
+При добавлении новой документации:
+
+1. **Выбрать правильную категорию** (formatting/features/guides/etc)
+2. **Использовать template:**
+   ```markdown
+   # Название
+   
+   ## Контекст
+   ## План
+   ## Примеры
+   ## Проверка
+   ```
+3. **Обновить этот README.md** с ссылкой на новый документ
+4. **Добавить в соответствующую папку**
 
 ---
 
-## 🔗 Внешние ссылки
-
-**API документация:**
-- Parser API: http://localhost:8010/docs
-- RAG Service: http://localhost:8020/docs
-
-**Cursor Rules:**
-- [.cursor/rules/n8n-telegram-bot.mdc](../../../.cursor/rules/n8n-telegram-bot.mdc)
-
----
-
-**Версия:** 2.2.1  
-**Организация:** Структурированная по категориям
-
-
+**Последнее обновление:** 14 октября 2025  
+**Версия документации:** 3.3.0  
+**Статус:** ✅ Актуально

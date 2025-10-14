@@ -13,6 +13,9 @@ from fastapi.responses import JSONResponse
 from typing import Optional
 from pydantic import BaseModel
 
+# Prometheus metrics
+from prometheus_client import make_asgi_app
+
 from database import SessionLocal
 from models import User, Post, IndexingStatus, DigestSettings
 import config
@@ -51,6 +54,11 @@ app = FastAPI(
     description="Сервис векторного поиска и генерации ответов для Telegram Channel Parser",
     version="0.1.0"
 )
+
+# Mount Prometheus metrics endpoint
+# Best practice from Context7: use make_asgi_app() for async ASGI integration
+metrics_app = make_asgi_app()
+app.mount("/metrics", metrics_app)
 
 
 @app.on_event("startup")

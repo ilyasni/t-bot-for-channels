@@ -16,10 +16,18 @@ try:
 except ImportError:
     from backports import zoneinfo
 
+# Prometheus metrics
+from prometheus_client import make_asgi_app
+
 # Logger для main.py
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
+
+# Mount Prometheus metrics endpoint
+# Best practice from Context7: use make_asgi_app() for async ASGI integration
+metrics_app = make_asgi_app()
+app.mount("/metrics", metrics_app)
 
 # КРИТИЧНО: Глобальный parser_service из главного event loop
 # Будет установлен при запуске системы (run_system.py)
@@ -2209,7 +2217,7 @@ async def admin_panel_users(admin_id: int, token: str):
                 await fetch(`/api/admin/user/${{userId}}/subscription?admin_id=${{adminId}}&token=${{token}}`, {{
                     method: 'POST',
                     headers: {{'Content-Type': 'application/json'}},
-                    body: JSON.stringify({{subscription_type: sub}})
+                    body: JSON.stringify({{type: sub, days: 0}})
                 }});
                 
                 closeModal();
@@ -2518,3 +2526,161 @@ async def admin_panel_invites(admin_id: int, token: str):
 # ============================================================
 # End of Admin Panel endpoints
 # ============================================================
+
+# ============================================================================
+# Neo4j Knowledge Graph API Endpoints
+# ============================================================================
+
+# Neo4j client
+try:
+    from graph.neo4j_client import neo4j_client
+except ImportError:
+    neo4j_client = None
+    logger.warning("⚠️ Neo4j graph module not available")
+
+
+@app.get("/graph/post/{post_id}/related")
+async def get_related_posts_endpoint(post_id: int, limit: int = 10):
+    """
+    Получить посты связанные через общие теги
+    
+    Args:
+        post_id: ID поста из PostgreSQL
+        limit: Количество результатов (default: 10)
+        
+    Returns:
+        {
+            "post_id": 123,
+            "related_posts": [
+                {
+                    "post_id": 456,
+                    "title": "Related Post",
+                    "common_tags": 3,
+                    "channel_id": "@channel"
+                }
+            ]
+        }
+    """
+    if not neo4j_client or not neo4j_client.enabled:
+        raise HTTPException(
+            503,
+            "Neo4j Knowledge Graph disabled. Set NEO4J_ENABLED=true in .env"
+        )
+    
+    try:
+        related = await neo4j_client.get_related_posts(post_id, limit)
+        return {
+            "post_id": post_id,
+            "related_posts": related,
+            "count": len(related)
+        }
+    except Exception as e:
+        logger.error(f"❌ Graph query error: {e}")
+        raise HTTPException(500, f"Graph query failed: {str(e)}")
+
+
+@app.get("/graph/tag/{tag_name}/relationships")
+async def get_tag_relationships_endpoint(tag_name: str, limit: int = 20):
+    """
+    Получить связи тега с другими тегами (co-occurrence)
+    
+    Args:
+        tag_name: Имя тега
+        limit: Количество результатов (default: 20)
+        
+    Returns:
+        {
+            "tag": "AI",
+            "related_tags": [
+                {
+                    "tag": "Python",
+                    "weight": 15,
+                    "posts_count": 42
+                }
+            ]
+        }
+    """
+    if not neo4j_client or not neo4j_client.enabled:
+        raise HTTPException(
+            503,
+            "Neo4j Knowledge Graph disabled. Set NEO4J_ENABLED=true in .env"
+        )
+    
+    try:
+        relationships = await neo4j_client.get_tag_relationships(tag_name, limit)
+        return {
+            "tag": tag_name,
+            "related_tags": relationships,
+            "count": len(relationships)
+        }
+    except Exception as e:
+        logger.error(f"❌ Graph query error: {e}")
+        raise HTTPException(500, f"Graph query failed: {str(e)}")
+
+
+@app.get("/graph/user/{user_id}/interests")
+async def get_user_interests_endpoint(user_id: int, limit: int = 20, db: Session = Depends(get_db)):
+    """
+    Анализ интересов пользователя через граф
+    
+    Args:
+        user_id: ID пользователя из PostgreSQL
+        limit: Количество топ тегов (default: 20)
+        
+    Returns:
+        {
+            "user_id": 123,
+            "telegram_id": 456789,
+            "interests": [
+                {
+                    "tag": "AI",
+                    "posts_count": 42,
+                    "usage_percent": 15.5
+                }
+            ]
+        }
+    """
+    if not neo4j_client or not neo4j_client.enabled:
+        raise HTTPException(
+            503,
+            "Neo4j Knowledge Graph disabled. Set NEO4J_ENABLED=true in .env"
+        )
+    
+    # Получить telegram_id пользователя
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(404, "User not found")
+    
+    try:
+        interests = await neo4j_client.get_user_interests(user.telegram_id, limit)
+        return {
+            "user_id": user_id,
+            "telegram_id": user.telegram_id,
+            "interests": interests,
+            "count": len(interests)
+        }
+    except Exception as e:
+        logger.error(f"❌ Graph query error: {e}")
+        raise HTTPException(500, f"Graph query failed: {str(e)}")
+
+
+@app.get("/graph/health")
+async def graph_health_check():
+    """
+    Проверить подключение к Neo4j
+    
+    Returns:
+        {
+            "neo4j_enabled": true,
+            "neo4j_connected": true
+        }
+    """
+    if not neo4j_client:
+        return {"neo4j_enabled": False, "neo4j_connected": False}
+    
+    is_healthy = await neo4j_client.health_check() if neo4j_client.enabled else False
+    
+    return {
+        "neo4j_enabled": neo4j_client.enabled,
+        "neo4j_connected": is_healthy
+    }

@@ -1,0 +1,71 @@
+===============================================================================
+OBSERVABILITY INTEGRATION - COMPLETE ✅
+===============================================================================
+
+Date: 2025-10-14 16:54 UTC
+Scope: Langfuse (AI tracing) + Prometheus (metrics) + Grafana (dashboards)
+
+===============================================================================
+COMPONENTS STATUS
+===============================================================================
+
+✅ Prometheus Metrics
+   - Telethon: http://localhost:8010/metrics (UP)
+   - RAG Service: http://localhost:8020/metrics (UP)
+   - Scraping: telegram-bot ✅, rag-service ✅
+
+✅ Langfuse AI Tracing
+   - Web UI: https://langfuse.produman.studio (UP)
+   - Worker: Running
+   - Database: Migrations applied
+   - Keys: Generated and configured
+
+✅ Grafana Dashboards
+   - UI: https://grafana.produman.studio
+   - Datasource: Prometheus (configured)
+   - Dashboards: telegram-bot-rag, telegram-bot-parsing (loaded)
+
+===============================================================================
+METRICS EXPORTED
+===============================================================================
+
+✅ rag_search_duration_seconds (histogram) - Qdrant search latency
+✅ rag_embeddings_duration_seconds (histogram) - Embeddings generation time
+✅ rag_query_errors_total (counter) - RAG operation errors
+✅ bot_parsing_queue_size (gauge) - Parsing queue length
+✅ bot_posts_parsed_total (counter) - Posts parsed by user
+
+===============================================================================
+NEXT STEPS
+===============================================================================
+
+1. Get Langfuse API Keys:
+   → Open: https://langfuse.produman.studio
+   → Create: Account → Organization → Project
+   → Copy: Public Key + Secret Key
+
+2. Add to .env:
+   LANGFUSE_ENABLED=true
+   LANGFUSE_PUBLIC_KEY=pk-lf-...
+   LANGFUSE_SECRET_KEY=sk-lf-...
+
+3. Rebuild:
+   docker compose up -d --build telethon
+
+4. Test:
+   → Execute /ask command in bot
+   → Check Langfuse UI for traces
+   → Check Grafana dashboards for metrics
+
+===============================================================================
+DOCUMENTATION
+===============================================================================
+
+Quick Start: OBSERVABILITY_QUICK_START.md
+Langfuse Guide: docs/observability/LANGFUSE_SETUP.md
+Prometheus Guide: docs/observability/PROMETHEUS_GRAFANA.md
+Main README: docs/observability/README.md
+
+===============================================================================
+DONE! 🎉
+===============================================================================

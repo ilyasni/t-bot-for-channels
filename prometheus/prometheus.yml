@@ -17,3 +17,17 @@ scrape_configs:
   - job_name: "cadvisor"
     static_configs:
       - targets: ["cadvisor:8080"]
+
+  # Telegram Bot metrics
+  - job_name: "telegram-bot"
+    static_configs:
+      - targets: ["telethon:8010"]
+    metrics_path: "/metrics"
+    scrape_interval: 30s
+
+  # RAG Service metrics  
+  - job_name: "rag-service"
+    static_configs:
+      - targets: ["rag-service:8020"]
+    metrics_path: "/metrics"
+    scrape_interval: 30s

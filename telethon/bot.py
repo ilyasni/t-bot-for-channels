@@ -30,7 +30,21 @@ from bot_debug_commands import (
 )
 from voice_transcription_service import voice_transcription_service
 from subscription_config import SUBSCRIPTION_TIERS
-from telegram_formatter import markdownify
+from telegram_formatter import markdownify, format_rag_answer
+
+# Observability
+try:
+    from observability.langfuse_client import langfuse_client
+except ImportError:
+    # Graceful degradation если observability модуль не установлен
+    class MockLangfuseClient:
+        def trace_context(self, *args, **kwargs):
+            from contextlib import contextmanager
+            @contextmanager
+            def _mock():
+                yield None
+            return _mock()
+    langfuse_client = MockLangfuseClient()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -1672,13 +1686,29 @@ class TelegramBot:
             # Отправляем "печатает..." индикатор
             await update.message.chat.send_action(action="typing")
             
-            # Вызов RAG service
-            result = await self._call_rag_service(
-                "/rag/ask",
-                user_id=db_user.id,
-                query=query_text,
-                context_limit=10
-            )
+            # Langfuse tracing для AI операций
+            with langfuse_client.trace_context(
+                "bot_ask_command",
+                metadata={
+                    "user_id": db_user.id,
+                    "query_length": len(query_text),
+                    "posts_count": posts_count
+                }
+            ) as trace:
+                # Вызов RAG service
+                result = await self._call_rag_service(
+                    "/rag/ask",
+                    user_id=db_user.id,
+                    query=query_text,
+                    context_limit=10
+                )
+                
+                # Обновляем trace метаданными о результате
+                if trace and result:
+                    trace.update(metadata={
+                        "sources_count": len(result.get("sources", [])),
+                        "answer_length": len(result.get("answer", ""))
+                    })
             
             if not result:
                 await update.message.reply_text(
@@ -2435,13 +2465,11 @@ class TelegramBot:
                 return
             
             answer = result.get("answer", "Не удалось найти ответ")
+            sources = result.get("sources", [])
             
-            # Форматируем ответ (источники уже включены в answer от RAG service)
-            # RAG возвращает Markdown - конвертируем в формат Telegram через markdownify
-            response_text = f"💡 Ответ:\n\n{answer}"
-            
-            # Конвертируем Markdown → MarkdownV2 для правильного отображения в Telegram
-            formatted_response = markdownify(response_text)
+            # Форматируем ответ с источниками в expandable blockquote
+            response_text = f"💡 <b>Ответ:</b>\n\n{answer}"
+            formatted_response = format_rag_answer(response_text, sources)
             
             await update.message.reply_text(
                 formatted_response,

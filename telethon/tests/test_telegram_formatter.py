@@ -8,7 +8,9 @@ from telegram_formatter import (
     format_digest_for_telegram,
     format_mention_for_telegram,
     markdownify,
-    markdown_to_html
+    markdown_to_html,
+    format_rag_answer,
+    format_long_digest
 )
 
 
@@ -299,6 +301,163 @@ class TestMarkdownify:
         assert len(result) > 0
 
 
+class TestAdvancedHTML:
+    """Тесты расширенных HTML возможностей Telegram"""
+    
+    def test_blockquote(self):
+        """Тест конвертации цитат"""
+        text = "> Это цитата\n> Многострочная цитата"
+        result = markdown_to_html(text)
+        
+        assert '<blockquote>' in result
+        assert '</blockquote>' in result
+        assert 'Это цитата' in result
+        
+    def test_spoiler(self):
+        """Тест спойлеров"""
+        text = "Текст ||спойлер|| еще текст"
+        result = markdown_to_html(text)
+        
+        assert '<tg-spoiler>спойлер</tg-spoiler>' in result
+        
+    def test_code_block_with_language(self):
+        """Тест code block с указанием языка"""
+        text = """```python
+def hello():
+    print('world')
+```"""
+        result = markdown_to_html(text)
+        
+        assert '<pre><code class="language-python">' in result
+        assert 'def hello():' in result
+        assert '</code></pre>' in result
+        
+    def test_code_block_without_language(self):
+        """Тест code block без языка"""
+        text = """```
+code here
+```"""
+        result = markdown_to_html(text)
+        
+        assert '<pre>' in result
+        assert 'code here' in result
+        assert '</pre>' in result
+        
+    def test_underline(self):
+        """Тест подчеркивания"""
+        text = "__подчеркнутый__ текст"
+        result = markdown_to_html(text)
+        
+        assert '<u>подчеркнутый</u>' in result
+        
+    def test_strikethrough(self):
+        """Тест зачеркивания"""
+        text = "~~зачеркнутый~~ текст"
+        result = markdown_to_html(text)
+        
+        assert '<s>зачеркнутый</s>' in result
+        
+    def test_nested_formatting(self):
+        """Тест вложенного форматирования"""
+        text = "**жирный *курсив* жирный**"
+        result = markdown_to_html(text)
+        
+        # Должен сохранить вложенность
+        assert '<b>' in result
+        assert '<i>' in result
+
+
+class TestFormatRAGAnswer:
+    """Тесты функции format_rag_answer"""
+    
+    def test_answer_without_sources(self):
+        """RAG ответ без источников"""
+        answer = "Python - это **язык программирования**"
+        result = format_rag_answer(answer, None)
+        
+        assert '<b>язык программирования</b>' in result
+        assert 'blockquote' not in result
+        
+    def test_answer_with_sources(self):
+        """RAG ответ с источниками"""
+        answer = "Python is great"
+        sources = [
+            {
+                'url': 'https://t.me/channel/123',
+                'channel_username': 'python_news',
+                'posted_at': '2024-01-15'
+            }
+        ]
+        result = format_rag_answer(answer, sources)
+        
+        assert 'Python is great' in result
+        assert '<blockquote expandable>' in result
+        assert '📚' in result
+        assert '<b>Источники:</b>' in result
+        assert '@python_news' in result
+        assert '2024-01-15' in result
+        
+    def test_answer_with_multiple_sources(self):
+        """RAG ответ с несколькими источниками"""
+        answer = "Answer"
+        sources = [
+            {'url': f'https://t.me/ch/{i}', 'channel_username': f'ch{i}', 'posted_at': '2024-01-01'}
+            for i in range(10)
+        ]
+        result = format_rag_answer(answer, sources)
+        
+        # Должно быть максимум 5 источников
+        assert result.count('<a href=') <= 5
+        
+    def test_answer_with_excerpt(self):
+        """RAG ответ с excerpt в источниках"""
+        answer = "Test"
+        sources = [{
+            'url': 'https://t.me/ch/1',
+            'channel_username': 'test',
+            'posted_at': '2024-01-01',
+            'excerpt': 'Краткая выдержка из поста'
+        }]
+        result = format_rag_answer(answer, sources)
+        
+        assert '<code>' in result
+        assert 'Краткая выдержка' in result
+
+
+class TestFormatLongDigest:
+    """Тесты функции format_long_digest"""
+    
+    def test_short_digest(self):
+        """Короткий дайджест без expandable"""
+        text = "Короткий текст дайджеста"
+        result = format_long_digest(text, max_visible=500)
+        
+        assert 'Короткий текст' in result
+        assert 'blockquote' not in result
+        
+    def test_long_digest(self):
+        """Длинный дайджест с expandable"""
+        text = "Начало дайджеста. " + "Средняя часть. " * 50 + "Конец дайджеста."
+        result = format_long_digest(text, max_visible=100)
+        
+        assert 'Начало дайджеста' in result
+        assert '<blockquote expandable>' in result
+        assert '</blockquote>' in result
+        
+    def test_digest_break_at_newline(self):
+        """Разрыв на переносе строки"""
+        text = "First part.\n" * 10 + "Second part.\n" * 10
+        result = format_long_digest(text, max_visible=60)
+        
+        # Должен разорвать по переносу строки
+        assert '<blockquote expandable>' in result
+        
+    def test_empty_digest(self):
+        """Пустой дайджест"""
+        result = format_long_digest("", max_visible=100)
+        assert result == ""
+
+
 class TestIntegration:
     """Интеграционные тесты"""
     
@@ -336,4 +495,36 @@ class TestIntegration:
         result = markdownify("test")
         
         assert isinstance(result, str)
+        
+    def test_digest_uses_html(self):
+        """Проверка что дайджест использует HTML теги"""
+        digest = {
+            'period': 'test',
+            'message_count': 5,
+            'topics': ['Topic1'],
+            'speakers_summary': {'user': 'Summary'},
+            'overall_summary': 'Overall'
+        }
+        
+        result = format_digest_for_telegram(digest, "Test")
+        
+        # Должен использовать HTML, а не Markdown
+        assert '<b>' in result
+        assert '<i>' in result
+        assert '**' not in result  # Не должно быть Markdown разметки
+        
+    def test_mention_uses_blockquote(self):
+        """Проверка что упоминания используют blockquote для контекста"""
+        analysis = {
+            'urgency': 'normal',
+            'context': 'Some important context',
+            'mention_reason': 'reason',
+            'key_points': ['point1']
+        }
+        
+        result = format_mention_for_telegram(analysis, "Test")
+        
+        # Контекст должен быть в blockquote
+        assert '<blockquote>' in result
+        assert 'important context' in result
 

@@ -171,36 +171,43 @@ class DigestGenerator:
         date_from: datetime,
         date_to: datetime
     ) -> str:
-        """Сгенерировать дайджест в формате Markdown"""
+        """Сгенерировать дайджест в HTML формате для Telegram"""
+        from html import escape
         lines = []
         
         # Заголовок
-        lines.append(f"# 📰 Дайджест постов")
-        lines.append(f"**Период:** {date_from.strftime('%d.%m.%Y')} - {date_to.strftime('%d.%m.%Y')}")
+        lines.append("<b>📰 Дайджест постов</b>")
+        lines.append(f"<i>Период: {date_from.strftime('%d.%m.%Y')} - {date_to.strftime('%d.%m.%Y')}</i>")
         lines.append("")
         
         # Посты по каналам
         for channel_username, posts in sorted(posts_by_channel.items()):
-            lines.append(f"## 📢 @{channel_username}")
-            lines.append(f"*Постов: {len(posts)}*")
+            lines.append(f"<b>📢 @{escape(channel_username)}</b>")
+            lines.append(f"<i>Постов: {len(posts)}</i>")
             lines.append("")
             
             for post in posts:
                 # Дата и теги
-                date_str = post.posted_at.strftime('%d.%m.%Y %H:%M')
-                tags_str = ""
+                date_str = post.posted_at.strftime('%d.%m %H:%M')
+                tags = []
                 if post.tags:
-                    tags_str = " | " + ", ".join([f"`{tag}`" for tag in post.tags[:3]])
+                    tags = [f"<code>{escape(tag)}</code>" for tag in post.tags[:3]]
+                tags_str = " ".join(tags) if tags else ""
                 
-                lines.append(f"### {date_str}{tags_str}")
+                lines.append(f"<b>{date_str}</b> {tags_str}")
                 
-                # Текст (первые 300 символов)
-                text = post.text[:300] + "..." if len(post.text) > 300 else post.text
-                lines.append(text)
+                # Текст с expandable для длинных постов
+                if len(post.text) > 300:
+                    visible_text = escape(post.text[:300])
+                    hidden_text = escape(post.text[300:])
+                    lines.append(f"{visible_text}...")
+                    lines.append(f"<blockquote expandable>{hidden_text}</blockquote>")
+                else:
+                    lines.append(escape(post.text))
                 
                 # Ссылка
                 if post.url:
-                    lines.append(f"[Читать полностью →]({post.url})")
+                    lines.append(f'<a href="{post.url}">Читать полностью →</a>')
                 
                 lines.append("")
         

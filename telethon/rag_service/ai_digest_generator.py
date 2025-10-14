@@ -420,21 +420,22 @@ class AIDigestGenerator:
         date_to: datetime
     ) -> str:
         """
-        Форматировать AI-дайджест в Markdown
+        Форматировать AI-дайджест в HTML для Telegram
         
         Args:
             topic_summaries: Список саммари по темам
             date_from, date_to: Период
             
         Returns:
-            Markdown дайджест
+            HTML дайджест для Telegram
         """
+        from html import escape
         lines = []
         
         # Заголовок
-        lines.append("# 🤖 AI-Дайджест")
-        lines.append(f"**Период:** {date_from.strftime('%d.%m.%Y')} - {date_to.strftime('%d.%m.%Y')}")
-        lines.append(f"**Тем:** {len(topic_summaries)}")
+        lines.append("<b>🤖 AI-Дайджест</b>")
+        lines.append(f"<i>Период: {date_from.strftime('%d.%m.%Y')} - {date_to.strftime('%d.%m.%Y')}</i>")
+        lines.append(f"<i>Тем: {len(topic_summaries)}</i>")
         lines.append("")
         
         # Саммари по темам
@@ -447,41 +448,49 @@ class AIDigestGenerator:
             # Эмодзи для топика
             emoji = self._get_topic_emoji(topic)
             
-            lines.append(f"## {emoji} {i}. {topic.title()}")
-            lines.append(f"*Постов проанализировано: {count}*")
-            lines.append("")
-            lines.append(summary)
+            lines.append(f"<b>{emoji} {i}. {escape(topic.title())}</b>")
+            lines.append(f"<i>Постов проанализировано: {count}</i>")
             lines.append("")
             
-            # Источники
+            # Саммари (может содержать разметку от AI)
+            lines.append(escape(summary))
+            lines.append("")
+            
+            # Источники в expandable blockquote
             if sources:
-                lines.append("**Источники:**")
-                for src in sources[:3]:  # Топ-3 источника
-                    channel = src.get('channel', '')
+                lines.append("<blockquote expandable>📚 <b>Источники:</b>")
+                for j, src in enumerate(sources[:3], 1):  # Топ-3 источника
+                    channel = escape(src.get('channel', ''))
                     date = src.get('date', '')
                     url = src.get('url', '')
                     if isinstance(date, str):
                         date = date[:10]
-                    lines.append(f"- [@{channel}, {date}]({url})")
+                    
+                    if url:
+                        lines.append(f'{j}. <a href="{url}">@{channel}</a> <i>({date})</i>')
+                    else:
+                        lines.append(f'{j}. @{channel} <i>({date})</i>')
+                
+                lines.append("</blockquote>")
                 lines.append("")
         
         # Футер
-        lines.append("---")
-        lines.append(f"*Дайджест сгенерирован AI (GigaChat) • {datetime.now().strftime('%d.%m.%Y %H:%M')}*")
+        lines.append("──────────────")
+        lines.append(f"<i>Дайджест сгенерирован AI (GigaChat) • {datetime.now().strftime('%d.%m.%Y %H:%M')}</i>")
         
         return "\n".join(lines)
     
     def _generate_empty_digest(self, date_from: datetime, date_to: datetime) -> str:
-        """Сгенерировать пустой дайджест"""
-        return f"""# 🤖 AI-Дайджест
-**Период:** {date_from.strftime('%d.%m.%Y')} - {date_to.strftime('%d.%m.%Y')}
+        """Сгенерировать пустой дайджест в HTML формате"""
+        return f"""<b>🤖 AI-Дайджест</b>
+<i>Период: {date_from.strftime('%d.%m.%Y')} - {date_to.strftime('%d.%m.%Y')}</i>
 
 За указанный период постов по интересующим вас темам не найдено.
 
-Попробуйте:
-- Расширить период поиска
-- Настроить темы в настройках дайджеста
-- Задать вопросы через RAG для формирования истории запросов
+<b>Попробуйте:</b>
+• Расширить период поиска
+• Настроить темы в настройках дайджеста
+• Задать вопросы через RAG для формирования истории запросов
 """
     
     def _get_topic_emoji(self, topic: str) -> str:

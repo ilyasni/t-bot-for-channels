@@ -10,6 +10,23 @@ import httpx
 import tiktoken
 from typing import List, Optional, Tuple
 import config
+import sys
+import os
+
+# Добавляем родительскую директорию для импорта observability
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+# Observability
+try:
+    from observability.langfuse_client import langfuse_client
+    from observability.metrics import rag_embeddings_duration_seconds, rag_query_errors_total
+except ImportError:
+    # Graceful degradation если observability модуль не установлен
+    logger = logging.getLogger(__name__)
+    logger.warning("⚠️ Observability modules not available")
+    langfuse_client = None
+    rag_embeddings_duration_seconds = None
+    rag_query_errors_total = None
 
 logger = logging.getLogger(__name__)
 
@@ -133,7 +150,23 @@ class EmbeddingsService:
         if not self.gigachat_enabled:
             return None
         
+        # Prometheus metrics timing
+        if rag_embeddings_duration_seconds:
+            timer = rag_embeddings_duration_seconds.labels(provider='gigachat').time()
+            timer.__enter__()
+        else:
+            timer = None
+        
         try:
+            # Langfuse tracing
+            trace_ctx = langfuse_client.trace_context(
+                "embedding_generation",
+                metadata={"provider": "gigachat", "text_length": len(text)}
+            ) if langfuse_client else None
+            
+            if trace_ctx:
+                trace_ctx.__enter__()
+            
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.post(
                     self.gigachat_url,
@@ -145,6 +178,8 @@ class EmbeddingsService:
                 
                 if response.status_code != 200:
                     logger.error(f"❌ GigaChat embeddings error {response.status_code}: {response.text[:200]}")
+                    if rag_query_errors_total:
+                        rag_query_errors_total.labels(error_type='gigachat_api_error').inc()
                     return None
                 
                 result = response.json()
@@ -155,11 +190,28 @@ class EmbeddingsService:
                     self.gigachat_vector_size = len(embedding)
                     logger.info(f"✅ GigaChat vector size: {self.gigachat_vector_size}")
                 
+                # Update trace with result
+                if trace_ctx:
+                    trace = trace_ctx.__enter__()
+                    if trace:
+                        trace.update(metadata={"embedding_dim": len(embedding)})
+                    trace_ctx.__exit__(None, None, None)
+                
                 return embedding
                 
+        except httpx.TimeoutException as e:
+            logger.error(f"❌ GigaChat timeout: {e}")
+            if rag_query_errors_total:
+                rag_query_errors_total.labels(error_type='gigachat_timeout').inc()
+            return None
         except Exception as e:
             logger.error(f"❌ Ошибка GigaChat embeddings: {e}")
+            if rag_query_errors_total:
+                rag_query_errors_total.labels(error_type='embedding_failed').inc()
             return None
+        finally:
+            if timer:
+                timer.__exit__(None, None, None)
     
     def _load_sentence_transformer(self):
         """Ленивая загрузка sentence-transformers модели"""

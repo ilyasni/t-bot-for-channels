@@ -26,6 +26,10 @@ psycopg2-binary==2.9.9
 python-dateutil==2.8.2
 pytz==2023.3
 
+# Observability
+langfuse>=2.0.0
+prometheus-client>=0.19.0
+
 # Note: sentence-transformers (опционально, ~3GB)
 # Раскомментируйте если нужен fallback для embeddings:
 # sentence-transformers==2.3.1

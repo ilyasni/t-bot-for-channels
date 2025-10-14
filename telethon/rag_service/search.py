@@ -21,6 +21,17 @@ from vector_db import qdrant_client
 from embeddings import embeddings_service
 import config
 
+# Observability
+try:
+    from observability.langfuse_client import langfuse_client
+    from observability.metrics import rag_search_duration_seconds, rag_query_errors_total
+except ImportError:
+    logger = logging.getLogger(__name__)
+    logger.warning("⚠️ Observability modules not available")
+    langfuse_client = None
+    rag_search_duration_seconds = None
+    rag_query_errors_total = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -65,6 +76,8 @@ class SearchService:
             result = await self.embeddings.generate_embedding(query)
             if not result:
                 logger.error("❌ Не удалось сгенерировать embedding для запроса")
+                if rag_query_errors_total:
+                    rag_query_errors_total.labels(error_type='embedding_failed').inc()
                 return []
             
             query_vector, provider = result
@@ -74,17 +87,50 @@ class SearchService:
             if min_score is None:
                 min_score = config.RAG_MIN_SCORE
             
-            # Выполняем векторный поиск в Qdrant
-            search_results = await self.qdrant.search(
-                user_id=user_id,
-                query_vector=query_vector,
-                limit=limit,
-                score_threshold=min_score,
-                channel_id=channel_id,
-                tags=tags,
-                date_from=date_from,
-                date_to=date_to
-            )
+            # Prometheus metrics: measure Qdrant search latency
+            if rag_search_duration_seconds:
+                timer = rag_search_duration_seconds.time()
+                timer.__enter__()
+            else:
+                timer = None
+            
+            # Langfuse tracing
+            trace_ctx = langfuse_client.trace_context(
+                "rag_vector_search",
+                metadata={
+                    "user_id": user_id,
+                    "query_length": len(query),
+                    "limit": limit,
+                    "provider": provider
+                }
+            ) if langfuse_client else None
+            
+            if trace_ctx:
+                trace_ctx.__enter__()
+            
+            try:
+                # Выполняем векторный поиск в Qdrant
+                search_results = await self.qdrant.search(
+                    user_id=user_id,
+                    query_vector=query_vector,
+                    limit=limit,
+                    score_threshold=min_score,
+                    channel_id=channel_id,
+                    tags=tags,
+                    date_from=date_from,
+                    date_to=date_to
+                )
+                
+                # Update trace with results
+                if trace_ctx:
+                    trace = trace_ctx.__enter__()
+                    if trace:
+                        trace.update(metadata={"results_count": len(search_results) if search_results else 0})
+                    trace_ctx.__exit__(None, None, None)
+                
+            finally:
+                if timer:
+                    timer.__exit__(None, None, None)
             
             if not search_results:
                 logger.info(f"📭 Поиск не нашел результатов для user {user_id}")

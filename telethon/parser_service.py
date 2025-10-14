@@ -13,6 +13,21 @@ import logging
 from typing import List
 from dotenv import load_dotenv
 
+# Observability
+try:
+    from observability.metrics import parsing_queue_size, posts_parsed_total
+except ImportError:
+    parsing_queue_size = None
+    posts_parsed_total = None
+
+# Neo4j Knowledge Graph
+try:
+    from graph.neo4j_client import neo4j_client
+except ImportError:
+    neo4j_client = None
+    logger = logging.getLogger(__name__)
+    logger.warning("⚠️ Neo4j graph module not available")
+
 load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
@@ -118,6 +133,10 @@ class ParserService:
     
     async def parse_channel_posts(self, channel: Channel, user, client, db):
         """Парсить посты для конкретного канала с использованием персонального клиента"""
+        # Prometheus metrics: track parsing queue
+        if parsing_queue_size:
+            parsing_queue_size.inc()
+        
         try:
             # Получаем информацию о подписке пользователя
             subscription = channel.get_user_subscription(db, user)
@@ -181,16 +200,28 @@ class ParserService:
                         
                         # Обогащаем пост контентом ссылок (если включено)
                         await self._enrich_post_with_links(new_post, db)
+                        
+                        # Neo4j: индексировать пост в Knowledge Graph (фоновая задача)
+                        if neo4j_client and neo4j_client.enabled:
+                            asyncio.create_task(self._index_post_in_graph(new_post, user, channel))
             
             # Обновляем время последнего парсинга для этого пользователя
             channel.update_user_subscription(db, user, last_parsed_at=datetime.now(timezone.utc))
             db.commit()
+            
+            # Prometheus metrics: track posts parsed
+            if posts_parsed_total and posts_added > 0:
+                posts_parsed_total.labels(user_id=str(user.id)).inc(posts_added)
             
             return posts_added
             
         except Exception as e:
             db.rollback()
             raise e
+        finally:
+            # Prometheus metrics: decrement queue size
+            if parsing_queue_size:
+                parsing_queue_size.dec()
     
     async def parse_user_channels_by_id(self, user_id: int) -> dict:
         """Парсить каналы конкретного пользователя по ID"""
@@ -324,6 +355,46 @@ class ParserService:
         url_pattern = r'https?://[^\s<>"{}|\\^`\[\]]+'
         urls = re.findall(url_pattern, text)
         return urls
+    
+    async def _index_post_in_graph(self, post: Post, user: User, channel: Channel):
+        """
+        Индексировать пост в Neo4j Knowledge Graph
+        
+        Args:
+            post: Объект Post из PostgreSQL
+            user: Объект User
+            channel: Объект Channel
+            
+        Создает в графе:
+            - Post node
+            - Relationships с User, Channel, Tags
+            - Tag co-occurrence relationships
+        """
+        if not neo4j_client or not neo4j_client.enabled:
+            return
+        
+        try:
+            # Создать User node если еще не существует
+            await neo4j_client.create_user_node(
+                telegram_id=user.telegram_id,
+                username=user.username
+            )
+            
+            # Создать Post node со всеми связями
+            await neo4j_client.create_post_node(
+                post_id=post.id,
+                user_id=user.telegram_id,
+                channel_id=f"@{channel.channel_username}",
+                title=post.text[:100] if post.text else "No title",  # Первые 100 символов
+                content=post.text,
+                tags=post.tags or [],  # Будут установлены после тегирования
+                created_at=post.posted_at.isoformat() if post.posted_at else None
+            )
+            
+            logger.debug(f"📊 Post {post.id} indexed in Neo4j graph")
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to index post {post.id} in Neo4j: {e}")
     
     async def _enrich_post_with_links(self, post: Post, db: SessionLocal):
         """
