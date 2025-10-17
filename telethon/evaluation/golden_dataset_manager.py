@@ -433,9 +433,9 @@ async def get_golden_dataset_manager() -> GoldenDatasetManager:
     global _golden_dataset_manager
     
     if _golden_dataset_manager is None:
-        database_url = os.getenv("DATABASE_URL")
+        database_url = os.getenv("TELEGRAM_DATABASE_URL") or os.getenv("DATABASE_URL")
         if not database_url:
-            raise ValueError("DATABASE_URL environment variable not set")
+            raise ValueError("TELEGRAM_DATABASE_URL or DATABASE_URL environment variable not set")
             
         _golden_dataset_manager = GoldenDatasetManager(database_url)
         await _golden_dataset_manager.connect()

@@ -78,7 +78,7 @@ services:
     restart: unless-stopped
     environment:
       # Database
-      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/postgres
+      TELEGRAM_DATABASE_URL: ${TELEGRAM_DATABASE_URL}
       
       # Telegram Bot
       BOT_TOKEN: ${BOT_TOKEN}

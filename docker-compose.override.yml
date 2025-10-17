@@ -25,7 +25,7 @@ services:
       - PORT=8010
       - PARSER_INTERVAL_MINUTES=30
       # База данных - ТОЛЬКО PostgreSQL (Supabase)
-      - TELEGRAM_DATABASE_URL=${TELEGRAM_DATABASE_URL}
+      - TELEGRAM_DATABASE_URL=postgresql://postgres:xiNmSysbbcqTOWT4eb1KkQtM2fb8X7Ms@postgres:5432/postgres
       # Telegram Bot Token
       - BOT_TOKEN=${BOT_TOKEN}
       # Ключ шифрования (общий для всего проекта)
@@ -112,7 +112,7 @@ services:
     environment:
       - HOST=0.0.0.0
       - PORT=8020
-      - TELEGRAM_DATABASE_URL=${TELEGRAM_DATABASE_URL}
+      - TELEGRAM_DATABASE_URL=postgresql://postgres:xiNmSysbbcqTOWT4eb1KkQtM2fb8X7Ms@postgres:5432/postgres
       - QDRANT_URL=http://qdrant:6333
       - QDRANT_API_KEY=${QDRANT_API_KEY}
       - QDRANT_EXTERNAL_URL=https://qdrant.produman.studio

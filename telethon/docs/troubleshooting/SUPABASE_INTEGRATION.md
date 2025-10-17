@@ -11,7 +11,7 @@
 1. **Добавьте переменную в корневой `.env` файл:**
 ```env
 # Подключение к локальной Supabase PostgreSQL через основной контейнер
-TELEGRAM_DATABASE_URL=postgresql://postgres:xiNmSysbbcqTOWT4eb1KkQtM2fb8X7Ms@supabase-db:5432/postgres?sslmode=disable
+TELEGRAM_DATABASE_URL=postgresql://postgres:xiNmSysbbcqTOWT4eb1KkQtM2fb8X7Ms@db:5432/postgres?sslmode=disable
 
 # Альтернативно через pooler (если основной не работает)
 # TELEGRAM_DATABASE_URL=postgresql://postgres:xiNmSysbbcqTOWT4eb1KkQtM2fb8X7Ms@supabase-pooler:5432/postgres?sslmode=disable

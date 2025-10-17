@@ -54,6 +54,10 @@ def set_gauge(metric, labels, value):
     except Exception as e:
         pass
 
+def observe_evaluation_score(metric, labels, score):
+    """Observe evaluation score metric (alias for observe_score)"""
+    return observe_score(metric, labels, score)
+
 def log_evaluation_metric_error(metric_name: str, error: Exception):
     """Log evaluation metric error"""
     import logging

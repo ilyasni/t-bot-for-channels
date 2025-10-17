@@ -29,7 +29,7 @@ try:
         ContextRelevance,
         AspectCritic
     )
-    from ragas.dataset import EvaluationDataset
+    from ragas.dataset import Dataset
     from ragas.llms import LangchainLLMWrapper
     RAGAS_AVAILABLE = True
 except ImportError:

@@ -172,7 +172,7 @@
 ✅ MASTER_API_ID=182419
 ✅ MASTER_API_HASH=<установлен>
 ✅ ADMIN_TELEGRAM_IDS=8124731874
-✅ TELEGRAM_DATABASE_URL=postgresql://...@supabase-db:5432/postgres
+✅ TELEGRAM_DATABASE_URL=postgresql://...@db:5432/postgres
 ✅ BOT_TOKEN=<установлен>
 ```
 

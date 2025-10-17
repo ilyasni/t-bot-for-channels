@@ -139,7 +139,7 @@ class EvaluationRunner:
         run_id = await self._save_evaluation_run(evaluation_run)
         
         # Update Prometheus metrics
-        increment_gauge(evaluation_runs_active)
+        increment_gauge(evaluation_runs_active, {})
         
         try:
             # Получить items из dataset
@@ -266,7 +266,7 @@ class EvaluationRunner:
             
         finally:
             # Update Prometheus metrics
-            decrement_gauge(evaluation_runs_active)
+            decrement_gauge(evaluation_runs_active, {})
     
     async def _evaluate_single_item_with_semaphore(
         self,

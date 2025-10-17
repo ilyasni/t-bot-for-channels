@@ -57,8 +57,9 @@ def get_db():
         db.close()
 
 # Настройка логирования
+log_level = getattr(logging, config.LOG_LEVEL.upper(), logging.INFO)
 logging.basicConfig(
-    level=getattr(logging, config.LOG_LEVEL),
+    level=log_level,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
@@ -1372,15 +1373,16 @@ if EVALUATION_AVAILABLE:
             runner = EvaluationRunner()
             
             # Запускаем evaluation асинхронно
-            run_id = await runner.start_evaluation_batch(
-                dataset_name=request.dataset_name,
-                run_name=request.run_name,
-                model_provider=request.model_provider,
-                model_name=request.model_name,
-                max_items=request.max_items,
-                parallel_workers=request.parallel_workers,
-                timeout_seconds=request.timeout_seconds
-            )
+            async with runner:
+                evaluation_run = await runner.run_evaluation(
+                    dataset_name=request.dataset_name,
+                    run_name=request.run_name,
+                    model_provider=request.model_provider,
+                    model_name=request.model_name,
+                    parallel_workers=request.parallel_workers,
+                    timeout_seconds=request.timeout_seconds
+                )
+                run_id = evaluation_run.run_name  # Use run_name as ID for now
             
             return EvaluationBatchResponse(
                 run_id=run_id,

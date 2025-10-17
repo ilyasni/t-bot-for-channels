@@ -34,12 +34,16 @@ def setup_telethon_logging():
         handlers=[
             # Основной лог файл
             logging.FileHandler(main_log, encoding='utf-8'),
-            # Лог файл для ошибок
-            logging.FileHandler(error_log, encoding='utf-8', level=logging.ERROR),
             # Консольный вывод
             logging.StreamHandler(sys.stdout)
         ]
     )
+    
+    # Добавляем отдельный handler для ошибок
+    error_handler = logging.FileHandler(error_log, encoding='utf-8')
+    error_handler.setLevel(logging.ERROR)
+    error_handler.setFormatter(logging.Formatter(log_format))
+    logging.getLogger().addHandler(error_handler)
     
     # Создаем логгеры для разных компонентов
     loggers = {

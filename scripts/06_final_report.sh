@@ -77,7 +77,7 @@ if is_profile_active "supabase"; then
   echo "Studio User: ${DASHBOARD_USERNAME:-<not_set_in_env>}"
   echo "Studio Password: ${DASHBOARD_PASSWORD:-<not_set_in_env>}"
   echo
-  echo "Internal API Gateway: http://supabase-kong:8000"
+  echo "Internal API Gateway: http://kong:8000"
   echo "Service Role Secret: ${SERVICE_ROLE_KEY:-<not_set_in_env>}"
 fi
 

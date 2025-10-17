@@ -26,6 +26,15 @@ import logging
 from datetime import datetime
 import time
 
+# Import Prometheus metrics for Neo4j monitoring
+try:
+    from rag_service.metrics import graph_query_latency, graph_query_errors_total
+    PROMETHEUS_AVAILABLE = True
+except ImportError:
+    PROMETHEUS_AVAILABLE = False
+    graph_query_latency = None
+    graph_query_errors_total = None
+
 logger = logging.getLogger(__name__)
 
 # Import metrics (опционально)
@@ -319,6 +328,7 @@ class Neo4jClient:
         except Exception as e:
             logger.error(f"❌ Failed to update tag co-occurrence: {e}")
     
+    @graph_query_latency.labels(query_type='get_related_posts').time() if PROMETHEUS_AVAILABLE and graph_query_latency else lambda x: x
     async def get_related_posts(
         self,
         post_id: int,
@@ -342,6 +352,22 @@ class Neo4jClient:
         """
         if not self.enabled or not self.driver:
             return []
+        
+        try:
+            # Use Prometheus timing context manager for entire method
+            if PROMETHEUS_AVAILABLE and graph_query_latency:
+                with graph_query_latency.labels(query_type='get_related_posts').time():
+                    return await self._get_related_posts_impl(post_id, limit)
+            else:
+                return await self._get_related_posts_impl(post_id, limit)
+        except Exception as e:
+            logger.error(f"❌ Failed to get related posts: {e}")
+            return []
+    
+    async def _get_related_posts_impl(self, post_id: int, limit: int) -> List[Dict[str, Any]]:
+        """Internal implementation of get_related_posts"""
+        import time
+        start_time = time.time()
         
         try:
             async with self.driver.session() as session:
@@ -377,11 +403,13 @@ class Neo4jClient:
                     })
                 
                 return related_posts
-                
-        except Exception as e:
-            logger.error(f"❌ Failed to get related posts: {e}")
-            return []
+        finally:
+            # Update Prometheus metrics
+            if PROMETHEUS_AVAILABLE and graph_query_latency:
+                duration = time.time() - start_time
+                graph_query_latency.labels(query_type='get_related_posts').observe(duration)
     
+    @graph_query_latency.labels(query_type='get_tag_relationships').time() if PROMETHEUS_AVAILABLE and graph_query_latency else lambda x: x
     async def get_tag_relationships(
         self,
         tag_name: str,
@@ -416,7 +444,12 @@ class Neo4jClient:
                 LIMIT $limit
                 """
                 
-                result = await session.run(query, tag_name=tag_name, limit=limit)
+                # Use Prometheus timing context manager for Neo4j query
+                if PROMETHEUS_AVAILABLE and graph_query_latency:
+                    with graph_query_latency.labels(query_type='get_tag_relationships_query').time():
+                        result = await session.run(query, tag_name=tag_name, limit=limit)
+                else:
+                    result = await session.run(query, tag_name=tag_name, limit=limit)
                 
                 relationships = []
                 async for record in result:
@@ -432,6 +465,7 @@ class Neo4jClient:
             logger.error(f"❌ Failed to get tag relationships: {e}")
             return []
     
+    @graph_query_latency.labels(query_type='get_user_interests').time() if PROMETHEUS_AVAILABLE and graph_query_latency else lambda x: x
     async def get_user_interests(
         self,
         telegram_id: int,
@@ -467,7 +501,12 @@ class Neo4jClient:
                 LIMIT $limit
                 """
                 
-                result = await session.run(query, telegram_id=telegram_id, limit=limit)
+                # Use Prometheus timing context manager for Neo4j query
+                if PROMETHEUS_AVAILABLE and graph_query_latency:
+                    with graph_query_latency.labels(query_type='get_user_interests_query').time():
+                        result = await session.run(query, telegram_id=telegram_id, limit=limit)
+                else:
+                    result = await session.run(query, telegram_id=telegram_id, limit=limit)
                 
                 interests = []
                 async for record in result:
@@ -564,6 +603,7 @@ class Neo4jClient:
             logger.error(f"❌ Failed to get post context: {e}")
             return {"related_posts": [], "tag_cluster": [], "channel_posts": []}
     
+    @graph_query_latency.labels(query_type='get_trending_tags').time() if PROMETHEUS_AVAILABLE and graph_query_latency else lambda x: x
     async def get_trending_tags(
         self,
         days: int = 7,
@@ -606,7 +646,12 @@ class Neo4jClient:
                 LIMIT $limit
                 """
                 
-                result = await session.run(query, days=days, limit=limit)
+                # Use Prometheus timing context manager for Neo4j query
+                if PROMETHEUS_AVAILABLE and graph_query_latency:
+                    with graph_query_latency.labels(query_type='get_trending_tags_query').time():
+                        result = await session.run(query, days=days, limit=limit)
+                else:
+                    result = await session.run(query, days=days, limit=limit)
                 
                 trending = []
                 async for record in result:
@@ -622,6 +667,7 @@ class Neo4jClient:
             logger.error(f"❌ Failed to get trending tags: {e}")
             return []
     
+    @graph_query_latency.labels(query_type='expand_with_graph').time() if PROMETHEUS_AVAILABLE and graph_query_latency else lambda x: x
     async def expand_with_graph(
         self,
         post_ids: List[int],
@@ -674,11 +720,20 @@ class Neo4jClient:
                 RETURN source_id, related_posts
                 """
                 
-                result = await session.run(
-                    query,
-                    post_ids=post_ids,
-                    limit_per_post=limit_per_post
-                )
+                # Use Prometheus timing context manager for Neo4j query
+                if PROMETHEUS_AVAILABLE and graph_query_latency:
+                    with graph_query_latency.labels(query_type='expand_with_graph_query').time():
+                        result = await session.run(
+                            query,
+                            post_ids=post_ids,
+                            limit_per_post=limit_per_post
+                        )
+                else:
+                    result = await session.run(
+                        query,
+                        post_ids=post_ids,
+                        limit_per_post=limit_per_post
+                    )
                 
                 expanded = []
                 async for record in result:

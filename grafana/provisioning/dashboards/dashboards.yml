@@ -4,10 +4,13 @@ providers:
   - name: 'Telegram Bot Dashboards'
     orgId: 1
     folder: 'Telegram Bot'
+    folderUid: 'telegram-bot'
     type: file
     disableDeletion: false
     editable: true
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
     options:
-      path: /var/lib/grafana/dashboards
+      path: /var/lib/grafana/dashboards/telegram-bot
       foldersFromFilesStructure: false
 

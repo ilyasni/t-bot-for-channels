@@ -21,14 +21,45 @@ except ImportError:
 # Prometheus metrics
 from prometheus_client import make_asgi_app
 
+# Logger для main.py
+logger = get_logger('main')
+
+# Import Neo4j metrics to register them
+try:
+    from rag_service.metrics import (
+        graph_query_latency,
+        graph_availability,
+        graph_query_errors_total,
+        graph_cache_hits_total,
+        graph_cache_misses_total,
+        hybrid_search_duration_seconds
+    )
+    logger.info("✅ Neo4j metrics imported successfully")
+except ImportError as e:
+    logger.warning(f"⚠️ Failed to import Neo4j metrics: {e}")
+
 # Maintenance services
 from maintenance.cleanup_scheduler import cleanup_scheduler
 from maintenance.unified_retention_service import unified_retention_service
 
-# Logger для main.py
-logger = get_logger('main')
-
 app = FastAPI()
+
+# Background task for periodic Neo4j health checks
+async def periodic_neo4j_health_check():
+    """
+    Периодически проверяет здоровье Neo4j и обновляет метрику graph_availability
+    Best practice from Context7: background tasks for health monitoring
+    """
+    while True:
+        try:
+            from graph.neo4j_client import neo4j_client
+            if neo4j_client and neo4j_client.enabled:
+                await neo4j_client.health_check()
+        except Exception as e:
+            logger.warning(f"⚠️ Neo4j health check background task error: {e}")
+        
+        # Check every 30 seconds
+        await asyncio.sleep(30)
 
 # Mount Prometheus metrics endpoint
 # Best practice from Context7: use make_asgi_app() for async ASGI integration
@@ -107,11 +138,16 @@ async def startup_event():
             from graph.neo4j_client import neo4j_client
             if neo4j_client.enabled:
                 await neo4j_client._create_constraints()
-                logger.info("✅ Neo4j constraints created")
+                # Initial health check to set availability metric
+                await neo4j_client.health_check()
+                logger.info("✅ Neo4j constraints created and health checked")
             else:
                 logger.info("⚠️ Neo4j disabled, skipping constraints creation")
         except Exception as e:
             logger.warning(f"⚠️ Neo4j constraints creation failed: {e}")
+        
+        # Start background task for periodic Neo4j health checks
+        asyncio.create_task(periodic_neo4j_health_check())
         
     except Exception as e:
         print(f"❌ Критическая ошибка инициализации: {str(e)}")
