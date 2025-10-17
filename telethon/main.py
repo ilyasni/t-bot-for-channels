@@ -11,6 +11,8 @@ import asyncio
 from telethon.errors import FloodWaitError
 import os
 import logging
+from logging_config import get_logger
+
 try:
     import zoneinfo
 except ImportError:
@@ -24,7 +26,7 @@ from maintenance.cleanup_scheduler import cleanup_scheduler
 from maintenance.unified_retention_service import unified_retention_service
 
 # Logger для main.py
-logger = logging.getLogger(__name__)
+logger = get_logger('main')
 
 app = FastAPI()
 
@@ -99,6 +101,17 @@ async def startup_event():
             logger.info("✅ Cleanup scheduler started")
         except Exception as e:
             logger.warning(f"⚠️ Cleanup scheduler failed to start: {e}")
+        
+        # Initialize Neo4j constraints (если включен)
+        try:
+            from graph.neo4j_client import neo4j_client
+            if neo4j_client.enabled:
+                await neo4j_client._create_constraints()
+                logger.info("✅ Neo4j constraints created")
+            else:
+                logger.info("⚠️ Neo4j disabled, skipping constraints creation")
+        except Exception as e:
+            logger.warning(f"⚠️ Neo4j constraints creation failed: {e}")
         
     except Exception as e:
         print(f"❌ Критическая ошибка инициализации: {str(e)}")

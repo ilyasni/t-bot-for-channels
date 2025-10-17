@@ -10,6 +10,7 @@ from telegram.ext import ContextTypes, CallbackQueryHandler
 from database import SessionLocal
 from models import User, InviteCode, SubscriptionHistory
 from subscription_config import get_subscription_info, SUBSCRIPTION_TIERS
+from admin_panel_manager import admin_panel_manager
 
 # Evaluation imports
 from evaluation.schemas import EvaluationBatchRequest
@@ -24,7 +25,7 @@ def is_admin(telegram_id: int) -> bool:
     db = SessionLocal()
     try:
         user = db.query(User).filter(User.telegram_id == telegram_id).first()
-        return user and user.is_admin()
+        return user is not None and user.is_admin()
     finally:
         db.close()
 
@@ -461,7 +462,6 @@ async def admin_panel_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     Команда: /admin
     """
     from telegram import WebAppInfo
-    from admin_panel_manager import admin_panel_manager
     import os
     
     user = update.effective_user

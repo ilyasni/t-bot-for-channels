@@ -175,8 +175,9 @@ class EmbeddingsService:
                 metadata={"provider": "gigachat", "text_length": len(text)}
             ) if langfuse_client else None
             
+            trace = None
             if trace_ctx:
-                trace_ctx.__enter__()
+                trace = trace_ctx.__enter__()
             
             # Внутренняя функция с retry для GigaChat API
             @retry(
@@ -221,11 +222,8 @@ class EmbeddingsService:
                 logger.info(f"✅ GigaChat vector size: {self.gigachat_vector_size}")
             
             # Update trace with result
-            if trace_ctx:
-                trace = trace_ctx.__enter__()
-                if trace:
-                    trace.update(metadata={"embedding_dim": len(embedding)})
-                trace_ctx.__exit__(None, None, None)
+            if trace:
+                trace.update(metadata={"embedding_dim": len(embedding)})
             
             return embedding
             
@@ -248,6 +246,8 @@ class EmbeddingsService:
         finally:
             if timer:
                 timer.__exit__(None, None, None)
+            if trace_ctx:
+                trace_ctx.__exit__(None, None, None)
     
     def _load_sentence_transformer(self):
         """Ленивая загрузка sentence-transformers модели"""

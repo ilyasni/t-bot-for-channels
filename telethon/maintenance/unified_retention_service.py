@@ -28,7 +28,12 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 from database import SessionLocal
 from models import Post, User, Channel, DigestSettings, user_channel
-from rag_service.metrics import record_cleanup
+try:
+    from rag_service.metrics import record_cleanup
+except ImportError:
+    # Fallback для тестов
+    def record_cleanup(*args, **kwargs):
+        pass
 
 logger = logging.getLogger(__name__)
 

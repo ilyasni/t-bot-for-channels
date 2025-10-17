@@ -10,7 +10,7 @@ python-dotenv==1.0.0
 qdrant-client==1.15.0  # Обновлено: совместимость с Qdrant 1.15+ API
 
 # Tokenizer (легкий, ~2MB)
-tiktoken==0.5.2
+tiktoken>=0.7.0
 
 # HTTP Client
 httpx==0.26.0
@@ -21,14 +21,24 @@ APScheduler==3.10.4
 # Database
 sqlalchemy==2.0.25
 psycopg2-binary==2.9.9
+asyncpg==0.29.0
 
 # Utils
 python-dateutil==2.8.2
 pytz==2023.3
 
 # Observability
-langfuse>=2.0.0
 prometheus-client>=0.19.0
+
+# Evaluation dependencies - упрощенная версия для быстрой сборки
+# Базовые зависимости для evaluation (без внешних LLM)
+datasets>=2.0.0  # Для работы с golden datasets
+
+# Langfuse для tracing (основная функциональность)
+langfuse>=3.0.0,<4.0.0
+
+# OpenAI для evaluation (совместимая версия)
+openai>=1.0.0,<2.0.0
 
 # Rate Limiting & Retry
 aiolimiter>=1.1.0  # Rate limiting для GigaChat (1 concurrent request)

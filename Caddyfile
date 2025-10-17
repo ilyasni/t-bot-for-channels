@@ -32,7 +32,7 @@
 
 # Supabase
 {$SUPABASE_HOSTNAME} {
-    reverse_proxy kong:8000
+    reverse_proxy supabase-kong:8000
 }
 
 # Telegram Auth Server (QR Mini App + Admin Panel + OAuth)

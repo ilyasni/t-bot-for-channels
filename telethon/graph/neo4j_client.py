@@ -91,7 +91,9 @@ class Neo4jClient:
             try:
                 uri = os.getenv("NEO4J_URI", "bolt://neo4j:7687")
                 username = os.getenv("NEO4J_USERNAME", "neo4j")
-                password = os.getenv("NEO4J_PASSWORD")
+                # Context7 best practice: graceful fallback for backward compatibility
+                # Support both NEO4J_PASSWORD and NEO4J_AUTH_PASSWORD formats
+                password = os.getenv("NEO4J_PASSWORD") or os.getenv("NEO4J_AUTH_PASSWORD")
                 
                 if not password:
                     logger.warning("⚠️ NEO4J_PASSWORD not set, graph features disabled")

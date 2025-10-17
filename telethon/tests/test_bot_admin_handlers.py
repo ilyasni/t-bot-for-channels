@@ -155,6 +155,8 @@ class TestAdminGrantCommand:
             telegram_id=9600002,
             subscription_type="free"
         )
+        db.flush()  # Убеждаемся что user persistent в сессии
+        db.commit()  # Коммитим изменения
         
         update = create_mock_telegram_update(user_id=admin.telegram_id)
         context = create_mock_telegram_context(args=["9600002", "premium", "30"])
@@ -162,14 +164,15 @@ class TestAdminGrantCommand:
         await admin_grant_command(update, context)
         
         # Проверяем обновление подписки
-        db.refresh(user)
-        assert user.subscription_type == "premium"
-        assert user.subscription_expires is not None
+        from models import User
+        updated_user = db.query(User).filter(User.telegram_id == 9600002).first()
+        assert updated_user.subscription_type == "premium"
+        assert updated_user.subscription_expires is not None
         
         # Проверяем что создана запись в истории
         from models import SubscriptionHistory
         history = db.query(SubscriptionHistory).filter(
-            SubscriptionHistory.user_id == user.id
+            SubscriptionHistory.user_id == updated_user.id
         ).first()
         
         assert history is not None
@@ -188,13 +191,13 @@ class TestAdminStatsCommand:
         admin = UserFactory.create_admin(db, telegram_id=9700001)
         
         # Создаем пользователей с разными подписками
-        UserFactory.create(db, telegram_id=9700002, subscription_type="free")
-        UserFactory.create(db, telegram_id=9700003, subscription_type="premium")
-        UserFactory.create(db, telegram_id=9700004, subscription_type="premium")
+        user1 = UserFactory.create(db, telegram_id=9700002, subscription_type="free")
+        user2 = UserFactory.create(db, telegram_id=9700003, subscription_type="premium")
+        user3 = UserFactory.create(db, telegram_id=9700004, subscription_type="premium")
         
         # Создаем инвайты
         InviteCodeFactory.create(db, created_by=admin.id)
-        InviteCodeFactory.create_used(db, created_by=admin.id, used_by=9700002)
+        InviteCodeFactory.create_used(db, created_by=admin.id, used_by=user1.id)
         
         update = create_mock_telegram_update(user_id=admin.telegram_id)
         context = create_mock_telegram_context()

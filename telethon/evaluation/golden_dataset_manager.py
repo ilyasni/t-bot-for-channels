@@ -57,6 +57,10 @@ class GoldenDatasetManager:
         """Async context manager exit"""
         await self.disconnect()
     
+    async def initialize(self):
+        """Инициализация manager (alias для connect)"""
+        await self.connect()
+    
     async def connect(self):
         """Создать connection pool"""
         if self._pool is None:

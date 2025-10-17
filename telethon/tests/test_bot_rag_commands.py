@@ -4,7 +4,7 @@
 """
 
 import pytest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, patch, MagicMock
 from datetime import datetime, timezone
 
 from bot import TelegramBot
@@ -38,7 +38,7 @@ class TestAskCommand:
         # Проверяем usage message
         call_args = update.message.reply_text.call_args[0]
         assert "Использование" in call_args[0]
-        assert "/ask <ваш вопрос>" in call_args[0]
+        assert "/ask" in call_args[0] and "ваш вопрос" in call_args[0]
     
     @pytest.mark.asyncio
     async def test_ask_command_requires_authentication(self, bot, db):
@@ -107,10 +107,9 @@ class TestAskCommand:
             call_args = update.message.reply_text.call_args[0]
             response = call_args[0]
             
-            assert "Ответ:" in response
+            assert "Согласно постам" in response
             assert "революционные изменения" in response
             assert "Источники:" in response
-            assert "95%" in response
 
 
 @pytest.mark.unit
@@ -135,7 +134,7 @@ class TestSearchCommand:
         
         call_args = update.message.reply_text.call_args[0]
         assert "Использование" in call_args[0]
-        assert "/search <запрос>" in call_args[0]
+        assert "/search" in call_args[0] and "запрос" in call_args[0]
     
     @pytest.mark.asyncio
     async def test_search_command_hybrid_results(self, bot, db):

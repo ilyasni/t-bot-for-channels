@@ -6,7 +6,7 @@ REST API для интеграции с n8n и другими сервисами
 import pytest
 from fastapi.testclient import TestClient
 from datetime import datetime, timezone, timedelta
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, patch, MagicMock
 
 import sys
 import os
@@ -173,9 +173,9 @@ class TestAPIRetentionEndpoints:
     
     def test_cleanup_run_endpoint(self, client, mock_db):
         """Тест POST /cleanup/run"""
-        # Mock cleanup service
-        with patch('main.cleanup_service') as mock_cleanup:
-            mock_cleanup.cleanup_old_posts = AsyncMock(return_value={
+        # Мокаем cleanup_service согласно best practices
+        with patch('cleanup_service.cleanup_service') as mock_cleanup_service:
+            mock_cleanup_service.cleanup_old_posts = AsyncMock(return_value={
                 "status": "success",
                 "users_processed": 5,
                 "total_posts_deleted": 100

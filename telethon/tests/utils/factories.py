@@ -241,6 +241,9 @@ class InviteCodeFactory:
                 admin = UserFactory.create_admin(db, telegram_id=admin_telegram_id)
             created_by = admin.id
         
+        # Убираем default_trial_days из kwargs если он там есть
+        kwargs.pop('default_trial_days', None)
+        
         invite = InviteCode(
             code=code,
             created_by=created_by,

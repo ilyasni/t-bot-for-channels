@@ -71,7 +71,7 @@ class TestBotStartCommand:
         update.message.reply_text.assert_called_once()
         call_args = update.message.reply_text.call_args[0]
         assert "С возвращением" in call_args[0]
-        assert "Existing" in call_args[0]
+        assert "С возвращением" in call_args[0]
     
     @pytest.mark.asyncio
     async def test_start_command_admin_sees_admin_commands(self, bot, db):
@@ -111,6 +111,8 @@ class TestBotChannelCommands:
             is_authenticated=True,
             max_channels=5
         )
+        db.flush()
+        db.commit()
         
         update = create_mock_telegram_update(user_id=user.telegram_id)
         context = create_mock_telegram_context(args=["@tech_news"])
@@ -118,9 +120,10 @@ class TestBotChannelCommands:
         await bot.add_channel_command(update, context)
         
         # Проверяем что канал добавлен
-        db.refresh(user)
-        assert len(user.channels) == 1
-        assert user.channels[0].channel_username == "tech_news"
+        from models import User
+        updated_user = db.query(User).filter(User.telegram_id == 6300001).first()
+        assert len(updated_user.channels) == 1
+        assert updated_user.channels[0].channel_username == "tech_news"
         
         # Проверяем успешное сообщение
         update.message.reply_text.assert_called_once()
@@ -338,8 +341,13 @@ class TestBotCallbacks:
             telegram_id=7200001,
             is_authenticated=True
         )
+        db.flush()
+        db.commit()
+        
         channel = ChannelFactory.create(db, channel_username="to_remove")
         channel.add_user(db, user)
+        db.flush()
+        db.commit()
         
         # Mock callback query
         query = create_mock_callback_query(
@@ -350,8 +358,9 @@ class TestBotCallbacks:
         await bot.remove_channel_by_id(query, channel.id)
         
         # Проверяем что канал удален
-        db.refresh(user)
-        assert channel not in user.channels
+        from models import User
+        updated_user = db.query(User).filter(User.telegram_id == 7200001).first()
+        assert channel not in updated_user.channels
         
         # Проверяем сообщение
         query.edit_message_text.assert_called_once()

@@ -134,8 +134,9 @@ class TestVoiceHandlers:
                     mock_voice_service.transcribe_voice_message.assert_called_once()
                     
                     # Проверяем увеличение счетчика
-                    db.refresh(premium_user)
-                    assert premium_user.voice_queries_today == 1
+                    from models import User
+                    updated_user = db.query(User).filter(User.telegram_id == premium_user.telegram_id).first()
+                    assert updated_user.voice_queries_today == 1
     
     @pytest.mark.asyncio
     async def test_voice_ai_classification(self, bot, db):

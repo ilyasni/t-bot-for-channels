@@ -16,7 +16,7 @@ class TestCryptoManager:
     
     def test_crypto_manager_initialization(self):
         """Тест инициализации с ENCRYPTION_KEY из env"""
-        with patch.dict(os.environ, {'ENCRYPTION_KEY': 'test_key_32_bytes_long_string!!'}):
+        with patch.dict(os.environ, {'ENCRYPTION_KEY': 'vq4toZhL5LIeAOyXlHAYD56vQJoPSuKZPXcTuSjWXEw='}):
             manager = CryptoManager()
             
             assert manager._fernet is not None

@@ -35,8 +35,10 @@ class FeatureFlags:
     def __init__(self):
         """Инициализация feature flags"""
         # Feature: Hybrid Search
-        self.hybrid_search_enabled = os.getenv("USE_HYBRID_SEARCH", "false").lower() == "true"
-        self.hybrid_search_percentage = int(os.getenv("HYBRID_SEARCH_PERCENTAGE", "10"))
+        # Context7 best practice: HybridRetriever pattern - vector + graph для лучшей accuracy
+        # Default: enabled globally for all users (100%)
+        self.hybrid_search_enabled = os.getenv("USE_HYBRID_SEARCH", "true").lower() == "true"
+        self.hybrid_search_percentage = int(os.getenv("HYBRID_SEARCH_PERCENTAGE", "100"))
         
         # Feature: Query Expansion
         self.query_expansion_enabled = os.getenv("USE_QUERY_EXPANSION", "false").lower() == "true"

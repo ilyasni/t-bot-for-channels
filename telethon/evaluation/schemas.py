@@ -90,7 +90,7 @@ class GoldenDatasetCreate(BaseModel):
 
 class EvaluationRun(BaseModel):
     """Запуск evaluation"""
-    run_id: str = Field(..., description="ID запуска")
+    run_id: Optional[str] = Field(None, description="ID запуска")
     run_name: str = Field(..., description="Название run")
     dataset_name: str = Field(..., description="Название dataset для оценки")
     model_provider: str = Field(..., description="Провайдер модели (gigachat, openrouter)")
@@ -111,8 +111,8 @@ class EvaluationRun(BaseModel):
     processed_items: int = Field(0, description="Обработано элементов")
     successful_items: int = Field(0, description="Успешно обработано")
     failed_items: int = Field(0, description="Ошибок")
-    avg_scores: Optional[Dict[str, float]] = Field(None, description="Средние scores")
-    overall_score: Optional[float] = Field(None, description="Общий score")
+    avg_score: Optional[float] = Field(None, description="Общий score")
+    scores: Optional[Dict[str, float]] = Field(None, description="Средние scores")
     duration_seconds: Optional[float] = Field(None, description="Длительность в секундах")
     metadata: Optional[Dict[str, Any]] = Field(None, description="Метаданные")
     

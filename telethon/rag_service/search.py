@@ -105,8 +105,9 @@ class SearchService:
                 }
             ) if langfuse_client else None
             
+            trace = None
             if trace_ctx:
-                trace_ctx.__enter__()
+                trace = trace_ctx.__enter__()
             
             try:
                 # Выполняем векторный поиск в Qdrant
@@ -122,15 +123,14 @@ class SearchService:
                 )
                 
                 # Update trace with results
-                if trace_ctx:
-                    trace = trace_ctx.__enter__()
-                    if trace:
-                        trace.update(metadata={"results_count": len(search_results) if search_results else 0})
-                    trace_ctx.__exit__(None, None, None)
+                if trace:
+                    trace.update(metadata={"results_count": len(search_results) if search_results else 0})
                 
             finally:
                 if timer:
                     timer.__exit__(None, None, None)
+                if trace_ctx:
+                    trace_ctx.__exit__(None, None, None)
             
             if not search_results:
                 logger.info(f"📭 Поиск не нашел результатов для user {user_id}")

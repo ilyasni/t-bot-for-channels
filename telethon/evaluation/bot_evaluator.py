@@ -15,6 +15,7 @@ Best practices:
 import logging
 import time
 import os
+import threading
 from typing import Dict, Any, Optional, List
 from datetime import datetime, timezone
 
@@ -33,6 +34,10 @@ try:
     RAGAS_AVAILABLE = True
 except ImportError:
     RAGAS_AVAILABLE = False
+    # Define dummy classes for when RAGAS is not available
+    class LangchainLLMWrapper:
+        def __init__(self, *args, **kwargs):
+            pass
     logging.warning("⚠️ RAGAS not available - evaluation will be disabled")
 
 # LangChain imports
@@ -75,6 +80,7 @@ class BotEvaluator:
         self.model_provider = model_provider
         self.model_name = model_name
         self.evaluator_llm = None
+        self.ragas_llm = None
         self.ragas_metrics = []
         
         if not RAGAS_AVAILABLE:
@@ -122,6 +128,7 @@ class BotEvaluator:
         except Exception as e:
             logger.error(f"❌ Failed to setup evaluator LLM: {e}")
             self.evaluator_llm = None
+            self.ragas_llm = None
     
     def _setup_ragas_metrics(self):
         """Setup RAGAS metrics"""
@@ -154,7 +161,7 @@ class BotEvaluator:
     
     def _create_channel_context_awareness_metric(self):
         """Custom metric: понимает ли бот специфику канала"""
-        if not RAGAS_AVAILABLE:
+        if not RAGAS_AVAILABLE or not self.ragas_llm:
             return None
         return AspectCritic(
             name="channel_context_awareness",
@@ -181,7 +188,7 @@ class BotEvaluator:
     
     def _create_group_synthesis_quality_metric(self):
         """Custom metric: качество синтеза group discussions"""
-        if not RAGAS_AVAILABLE:
+        if not RAGAS_AVAILABLE or not self.ragas_llm:
             return None
         return AspectCritic(
             name="group_synthesis_quality",
@@ -209,7 +216,7 @@ class BotEvaluator:
     
     def _create_multi_source_coherence_metric(self):
         """Custom metric: согласованность при синтезе из разных каналов"""
-        if not RAGAS_AVAILABLE:
+        if not RAGAS_AVAILABLE or not self.ragas_llm:
             return None
         return AspectCritic(
             name="multi_source_coherence",
@@ -235,7 +242,7 @@ class BotEvaluator:
     
     def _create_tone_appropriateness_metric(self):
         """Custom metric: соответствие тона аудитории"""
-        if not RAGAS_AVAILABLE:
+        if not RAGAS_AVAILABLE or not self.ragas_llm:
             return None
         return AspectCritic(
             name="tone_appropriateness",
@@ -260,19 +267,21 @@ class BotEvaluator:
             llm=self.ragas_llm
         )
     
-    async def evaluate_single_item(
+    def evaluate_single_item(
         self,
         item: GoldenDatasetItem,
         actual_output: str,
-        retrieved_contexts: Optional[List[str]] = None
+        retrieved_contexts: Optional[List[str]] = None,
+        timeout_seconds: int = 300
     ) -> EvaluationResult:
         """
-        Оценить один элемент golden dataset
+        Оценить один элемент golden dataset с timeout pattern
         
         Args:
             item: Golden dataset item
             actual_output: Фактический ответ бота
             retrieved_contexts: Retrieved контексты (для RAG)
+            timeout_seconds: Timeout для evaluation (default: 5 minutes)
             
         Returns:
             EvaluationResult с метриками
@@ -294,12 +303,23 @@ class BotEvaluator:
             # Создать EvaluationDataset
             dataset = EvaluationDataset.from_dict(ragas_data)
             
-            # Запустить evaluation
-            result = evaluate(
+            # Запустить evaluation с timeout pattern (RAGAS best practice)
+            result, error = self._evaluate_with_timeout(
                 dataset=dataset,
                 metrics=self.ragas_metrics,
-                llm=self.ragas_llm
+                timeout_seconds=timeout_seconds
             )
+            
+            if error == "timeout":
+                logger.warning(f"⏰ Evaluation timeout for item {item.item_id} after {timeout_seconds}s")
+                return self._create_fallback_result(
+                    item, actual_output, f"Evaluation timeout after {timeout_seconds}s"
+                )
+            elif error:
+                logger.error(f"❌ Evaluation error for item {item.item_id}: {error}")
+                return self._create_fallback_result(
+                    item, actual_output, f"Evaluation error: {str(error)}"
+                )
             
             # Извлечь scores
             scores = result.to_pandas().iloc[0].to_dict()
@@ -342,6 +362,52 @@ class BotEvaluator:
             return self._create_fallback_result(
                 item, actual_output, f"Evaluation error: {str(e)}"
             )
+    
+    def _evaluate_with_timeout(self, dataset, metrics, timeout_seconds: int = 300):
+        """
+        Run evaluation with automatic timeout (RAGAS best practice)
+        
+        Args:
+            dataset: RAGAS EvaluationDataset
+            metrics: List of RAGAS metrics
+            timeout_seconds: Timeout in seconds
+            
+        Returns:
+            Tuple of (results, error) where error can be None, "timeout", or Exception
+        """
+        if not RAGAS_AVAILABLE:
+            return None, "RAGAS not available"
+        
+        # Get cancellable executor
+        executor = evaluate(dataset=dataset, metrics=metrics, return_executor=True)
+        
+        results = None
+        exception = None
+        
+        def run_evaluation():
+            nonlocal results, exception
+            try:
+                results = executor.results()
+            except Exception as e:
+                exception = e
+        
+        # Start evaluation in background thread
+        thread = threading.Thread(target=run_evaluation)
+        thread.start()
+        
+        # Wait for completion or timeout
+        thread.join(timeout=timeout_seconds)
+        
+        if thread.is_alive():
+            logger.warning(f"Evaluation exceeded {timeout_seconds}s timeout, cancelling...")
+            executor.cancel()
+            thread.join(timeout=10)  # Wait for cancellation
+            return None, "timeout"
+        
+        if exception:
+            return None, exception
+        
+        return results, None
     
     def _calculate_overall_score(self, scores: Dict[str, float]) -> float:
         """

@@ -55,7 +55,7 @@ fi
 # Останавливаем n8n
 echo -e "${YELLOW}🛑 Останавливаем n8n...${NC}"
 cd /home/ilyasni/n8n-server/n8n-installer
-docker compose stop n8n n8n-worker || true
+docker compose -p localai stop n8n n8n-worker || true
 
 # Разархивируем бэкап
 TEMP_SQL="/tmp/restore-$(basename ${BACKUP_FILE} .gz)"
@@ -76,7 +76,7 @@ docker exec postgres rm /tmp/restore.sql
 
 # Перезапускаем n8n
 echo -e "${YELLOW}🚀 Запускаем n8n...${NC}"
-docker compose up -d n8n
+docker compose -p localai up -d n8n
 
 echo ""
 echo -e "${GREEN}✅ Восстановление завершено!${NC}"

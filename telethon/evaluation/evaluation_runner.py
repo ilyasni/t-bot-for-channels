@@ -20,11 +20,13 @@ Best practices:
 import asyncio
 import logging
 import time
+import os
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional, AsyncGenerator
 import json
 
 import httpx
+import asyncpg
 from .golden_dataset_manager import get_golden_dataset_manager
 from .bot_evaluator import get_bot_evaluator
 from .schemas import (
@@ -60,6 +62,8 @@ class EvaluationRunner:
         """
         self.rag_service_url = rag_service_url
         self.http_client: Optional[httpx.AsyncClient] = None
+        self.db_pool: Optional[asyncpg.Pool] = None
+        self.golden_dataset_manager = None  # Will be set in __aenter__
         
     async def __aenter__(self):
         """Async context manager entry"""
@@ -67,12 +71,31 @@ class EvaluationRunner:
             timeout=httpx.Timeout(300.0),  # 5 minutes timeout
             limits=httpx.Limits(max_keepalive_connections=10, max_connections=20)
         )
+        
+        # Initialize database pool
+        database_url = os.getenv("TELEGRAM_DATABASE_URL")
+        if database_url:
+            self.db_pool = await asyncpg.create_pool(
+                database_url,
+                min_size=1,
+                max_size=5,
+                command_timeout=60
+            )
+            logger.info("✅ EvaluationRunner connected to PostgreSQL")
+        
+        # Initialize golden dataset manager
+        self.golden_dataset_manager = await get_golden_dataset_manager()
+        
         return self
         
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """Async context manager exit"""
         if self.http_client:
             await self.http_client.aclose()
+        
+        if self.db_pool:
+            await self.db_pool.close()
+            logger.info("✅ EvaluationRunner disconnected from PostgreSQL")
     
     async def run_evaluation(
         self,
@@ -274,10 +297,11 @@ class EvaluationRunner:
             
             # Запустить evaluation
             evaluator = get_bot_evaluator(model_provider, model_name)
-            result = await evaluator.evaluate_single_item(
+            result = evaluator.evaluate_single_item(
                 item=item,
                 actual_output=actual_output,
-                retrieved_contexts=retrieved_contexts
+                retrieved_contexts=retrieved_contexts,
+                timeout_seconds=timeout_seconds
             )
             
             return result
@@ -414,19 +438,222 @@ class EvaluationRunner:
     
     async def _save_evaluation_run(self, evaluation_run: EvaluationRun) -> int:
         """Сохранить evaluation run в БД"""
-        # TODO: Implement database save
-        # For now, return a mock ID
-        return 1
+        if not self.db_pool:
+            logger.warning("⚠️ Database pool not available, using mock ID")
+            return 1
+        
+        try:
+            async with self.db_pool.acquire() as conn:
+                run_id = await conn.fetchval("""
+                    INSERT INTO evaluation_runs (
+                        run_name, dataset_name, model_provider, model_name,
+                        parallel_workers, timeout_seconds, status, progress,
+                        total_items, processed_items, successful_items, failed_items,
+                        avg_score, scores, started_at, completed_at
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+                    RETURNING id
+                """, 
+                    evaluation_run.run_name,
+                    evaluation_run.dataset_name,
+                    evaluation_run.model_provider,
+                    evaluation_run.model_name,
+                    evaluation_run.parallel_workers,
+                    evaluation_run.timeout_seconds,
+                    evaluation_run.status,
+                    evaluation_run.progress,
+                    evaluation_run.total_items,
+                    evaluation_run.processed_items,
+                    evaluation_run.successful_items,
+                    evaluation_run.failed_items,
+                    evaluation_run.avg_score,
+                    json.dumps(evaluation_run.scores) if evaluation_run.scores else None,
+                    evaluation_run.started_at,
+                    evaluation_run.completed_at
+                )
+                
+                logger.info(f"✅ Saved evaluation run {evaluation_run.run_name} with ID {run_id}")
+                return run_id
+                
+        except Exception as e:
+            logger.error(f"❌ Failed to save evaluation run: {e}")
+            return 1  # Fallback to mock ID
     
     async def _update_evaluation_run(self, run_id: int, evaluation_run: EvaluationRun):
         """Обновить evaluation run в БД"""
-        # TODO: Implement database update
-        pass
+        if not self.db_pool:
+            return
+        
+        try:
+            async with self.db_pool.acquire() as conn:
+                await conn.execute("""
+                    UPDATE evaluation_runs SET
+                        status = $2,
+                        progress = $3,
+                        total_items = $4,
+                        processed_items = $5,
+                        successful_items = $6,
+                        failed_items = $7,
+                        avg_score = $8,
+                        scores = $9,
+                        started_at = $10,
+                        completed_at = $11
+                    WHERE id = $1
+                """,
+                    run_id,
+                    evaluation_run.status,
+                    evaluation_run.progress,
+                    evaluation_run.total_items,
+                    evaluation_run.processed_items,
+                    evaluation_run.successful_items,
+                    evaluation_run.failed_items,
+                    evaluation_run.avg_score,
+                    json.dumps(evaluation_run.scores) if evaluation_run.scores else None,
+                    evaluation_run.started_at,
+                    evaluation_run.completed_at
+                )
+                
+        except Exception as e:
+            logger.error(f"❌ Failed to update evaluation run {run_id}: {e}")
     
     async def _save_evaluation_result(self, run_id: int, result: EvaluationResult):
         """Сохранить evaluation result в БД"""
-        # TODO: Implement database save
-        pass
+        if not self.db_pool:
+            return
+        
+        try:
+            async with self.db_pool.acquire() as conn:
+                await conn.execute("""
+                    INSERT INTO evaluation_results (
+                        run_id, item_id, query, expected_output, actual_output,
+                        answer_correctness, faithfulness, context_relevance,
+                        factual_correctness, channel_context_awareness,
+                        group_synthesis_quality, multi_source_coherence,
+                        tone_appropriateness, overall_score, evaluation_time,
+                        model_used, retrieved_contexts, telegram_context,
+                        error_message, debug_info, created_at
+                    ) VALUES (
+                        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, NOW()
+                    )
+                """,
+                    run_id,
+                    result.item_id,
+                    result.query,
+                    result.expected_output,
+                    result.actual_output,
+                    result.metrics.answer_correctness,
+                    result.metrics.faithfulness,
+                    result.metrics.context_relevance,
+                    result.metrics.factual_correctness,
+                    result.metrics.channel_context_awareness,
+                    result.metrics.group_synthesis_quality,
+                    result.metrics.multi_source_coherence,
+                    result.metrics.tone_appropriateness,
+                    result.metrics.overall_score,
+                    result.metrics.evaluation_time,
+                    result.metrics.model_used,
+                    json.dumps(result.retrieved_contexts) if result.retrieved_contexts else None,
+                    json.dumps(result.telegram_context.dict()) if result.telegram_context else None,
+                    result.error_message,
+                    json.dumps(result.debug_info) if result.debug_info else None
+                )
+                
+        except Exception as e:
+            logger.error(f"❌ Failed to save evaluation result for item {result.item_id}: {e}")
+    
+    async def list_evaluation_results(
+        self,
+        run_id: Optional[int] = None,
+        dataset_name: Optional[str] = None,
+        status: Optional[str] = None,
+        min_score: Optional[float] = None,
+        limit: int = 100,
+        offset: int = 0
+    ) -> List[Dict[str, Any]]:
+        """Получить список evaluation results с фильтрами"""
+        if not self.db_pool:
+            return []
+        
+        try:
+            async with self.db_pool.acquire() as conn:
+                # Build query with filters
+                query = "SELECT * FROM evaluation_results WHERE 1=1"
+                params = []
+                param_count = 0
+                
+                if run_id is not None:
+                    param_count += 1
+                    query += f" AND run_id = ${param_count}"
+                    params.append(run_id)
+                
+                if dataset_name is not None:
+                    param_count += 1
+                    query += f" AND run_id IN (SELECT id FROM evaluation_runs WHERE dataset_name = ${param_count})"
+                    params.append(dataset_name)
+                
+                if status is not None:
+                    param_count += 1
+                    query += f" AND error_message IS {'NULL' if status == 'success' else 'NOT NULL'}"
+                
+                if min_score is not None:
+                    param_count += 1
+                    query += f" AND overall_score >= ${param_count}"
+                    params.append(min_score)
+                
+                query += f" ORDER BY created_at DESC LIMIT ${param_count + 1} OFFSET ${param_count + 2}"
+                params.extend([limit, offset])
+                
+                rows = await conn.fetch(query, *params)
+                return [dict(row) for row in rows]
+                
+        except Exception as e:
+            logger.error(f"❌ Failed to list evaluation results: {e}")
+            return []
+    
+    async def _update_prometheus_metrics(
+        self,
+        dataset_name: str,
+        model_provider: str,
+        model_name: str,
+        total_items: int,
+        successful_items: int,
+        failed_items: int,
+        overall_score: float
+    ):
+        """Обновить Prometheus metrics"""
+        try:
+            labels = {
+                "dataset": dataset_name,
+                "model_provider": model_provider,
+                "model_name": model_name
+            }
+            
+            # Update counters
+            increment_counter(
+                evaluation_runs_total,
+                {**labels, "status": "completed"}
+            )
+            
+            increment_counter(
+                evaluation_items_processed,
+                {**labels, "status": "success"},
+                successful_items
+            )
+            
+            increment_counter(
+                evaluation_items_processed,
+                {**labels, "status": "error"},
+                failed_items
+            )
+            
+            # Update gauges
+            set_gauge(
+                evaluation_runs_active,
+                0,  # No active runs after completion
+                labels
+            )
+            
+        except Exception as e:
+            log_evaluation_metric_error("prometheus_update", e)
 
 
 # ============================================================================

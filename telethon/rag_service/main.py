@@ -28,14 +28,19 @@ from schemas import (
     HealthResponse
 )
 
-# Evaluation imports
-from evaluation.schemas import (
-    EvaluationBatchRequest,
-    EvaluationBatchResponse,
-    EvaluationStatusResponse,
-    EvaluationResultsResponse
-)
-from evaluation.evaluation_runner import EvaluationRunner
+# Evaluation imports - упрощенная версия
+try:
+    from evaluation.schemas import (
+        EvaluationBatchRequest,
+        EvaluationBatchResponse,
+        EvaluationStatusResponse,
+        EvaluationResultsResponse
+    )
+    from evaluation.evaluation_runner import EvaluationRunner
+    EVALUATION_AVAILABLE = True
+except ImportError as e:
+    print(f"⚠️ Evaluation modules not available: {e}")
+    EVALUATION_AVAILABLE = False
 from indexer import indexer_service
 from vector_db import qdrant_client
 from embeddings import embeddings_service
@@ -1348,122 +1353,114 @@ async def hybrid_search(request: HybridSearchRequest):
 # Evaluation Endpoints
 # ============================================================================
 
-@app.post("/evaluation/batch", response_model=EvaluationBatchResponse)
-async def run_evaluation_batch(request: EvaluationBatchRequest):
-    """
-    Запустить batch evaluation на golden dataset
+if EVALUATION_AVAILABLE:
+    @app.post("/evaluation/batch", response_model=EvaluationBatchResponse)
+    async def start_evaluation_batch(request: EvaluationBatchRequest):
+        """
+        Запустить batch evaluation на golden dataset
+        
+        Args:
+            request: Параметры batch evaluation
+            
+        Returns:
+            EvaluationBatchResponse: Информация о запущенном evaluation
+        """
+        try:
+            logger.info(f"🚀 Запуск batch evaluation: {request.run_name} на dataset {request.dataset_name}")
+            
+            # Создаем evaluation runner
+            runner = EvaluationRunner()
+            
+            # Запускаем evaluation асинхронно
+            run_id = await runner.start_evaluation_batch(
+                dataset_name=request.dataset_name,
+                run_name=request.run_name,
+                model_provider=request.model_provider,
+                model_name=request.model_name,
+                max_items=request.max_items,
+                parallel_workers=request.parallel_workers,
+                timeout_seconds=request.timeout_seconds
+            )
+            
+            return EvaluationBatchResponse(
+                run_id=run_id,
+                run_name=request.run_name,
+                status="started",
+                total_items=0,  # Будет обновлено в процессе
+                message=f"Evaluation {request.run_name} запущен успешно",
+                estimated_duration=None  # Будет рассчитано
+            )
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка запуска evaluation: {e}")
+            raise HTTPException(status_code=500, detail=f"Ошибка запуска evaluation: {str(e)}")
+
+
+    @app.get("/evaluation/status/{run_id}", response_model=EvaluationStatusResponse)
+    async def get_evaluation_status(run_id: str):
+        """
+        Получить статус evaluation run
+        
+        Args:
+            run_id: ID запуска evaluation
+            
+        Returns:
+            EvaluationStatusResponse: Статус и прогресс evaluation
+        """
+        try:
+            runner = EvaluationRunner()
+            status = await runner.get_evaluation_status(run_id)
+            
+            if not status:
+                raise HTTPException(status_code=404, detail=f"Evaluation run {run_id} не найден")
+            
+            return status
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Ошибка получения статуса evaluation {run_id}: {e}")
+            raise HTTPException(status_code=500, detail=f"Ошибка получения статуса: {str(e)}")
+
+
+    @app.get("/evaluation/results/{run_id}", response_model=EvaluationResultsResponse)
+    async def get_evaluation_results(run_id: str):
+        """
+        Получить результаты evaluation run
+        
+        Args:
+            run_id: ID запуска evaluation
+            
+        Returns:
+            EvaluationResultsResponse: Детальные результаты evaluation
+        """
+        try:
+            runner = EvaluationRunner()
+            results = await runner.get_evaluation_results(run_id)
+            
+            if not results:
+                raise HTTPException(status_code=404, detail=f"Результаты evaluation {run_id} не найдены")
+            
+            return results
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Ошибка получения результатов evaluation {run_id}: {e}")
+            raise HTTPException(status_code=500, detail=f"Ошибка получения результатов: {str(e)}")
+else:
+    # Заглушки для evaluation endpoints когда модули недоступны
+    @app.post("/evaluation/batch")
+    async def start_evaluation_batch_disabled():
+        raise HTTPException(status_code=503, detail="Evaluation service temporarily unavailable")
     
-    Args:
-        request: Параметры evaluation
-        
-    Returns:
-        EvaluationBatchResponse с ID запуска
-    """
-    try:
-        logger.info(f"🚀 Starting evaluation batch: {request.dataset_name}")
-        
-        # Запустить evaluation в background
-        async def run_evaluation():
-            async with EvaluationRunner() as runner:
-                await runner.run_evaluation(
-                    dataset_name=request.dataset_name,
-                    run_name=request.run_name,
-                    model_provider=request.model_provider,
-                    model_name=request.model_name,
-                    parallel_workers=request.parallel_workers,
-                    timeout_seconds=request.timeout_seconds
-                )
-        
-        # Создать task для background execution
-        import asyncio
-        task = asyncio.create_task(run_evaluation())
-        
-        # TODO: Сохранить task ID для tracking
-        
-        return EvaluationBatchResponse(
-            run_id=request.run_name,  # Используем run_name как ID
-            status="started",
-            message=f"Evaluation batch started for dataset '{request.dataset_name}'",
-            estimated_duration=300  # 5 minutes estimate
-        )
-        
-    except Exception as e:
-        logger.error(f"❌ Failed to start evaluation batch: {e}")
-        raise HTTPException(500, f"Failed to start evaluation: {str(e)}")
-
-
-@app.get("/evaluation/status/{run_id}", response_model=EvaluationStatusResponse)
-async def get_evaluation_status(run_id: str):
-    """
-    Получить статус evaluation run
+    @app.get("/evaluation/status/{run_id}")
+    async def get_evaluation_status_disabled(run_id: str):
+        raise HTTPException(status_code=503, detail="Evaluation service temporarily unavailable")
     
-    Args:
-        run_id: ID evaluation run
-        
-    Returns:
-        EvaluationStatusResponse с текущим статусом
-    """
-    try:
-        # TODO: Реализовать получение статуса из БД
-        # Пока возвращаем mock данные
-        
-        return EvaluationStatusResponse(
-            run_id=run_id,
-            status="running",
-            progress=0.5,
-            total_items=10,
-            processed_items=5,
-            avg_score=None,
-            started_at=datetime.now(timezone.utc),
-            completed_at=None
-        )
-        
-    except Exception as e:
-        logger.error(f"❌ Failed to get evaluation status: {e}")
-        raise HTTPException(500, f"Failed to get status: {str(e)}")
-
-
-@app.get("/evaluation/results/{run_id}", response_model=EvaluationResultsResponse)
-async def get_evaluation_results(run_id: str):
-    """
-    Получить результаты evaluation run
-    
-    Args:
-        run_id: ID evaluation run
-        
-    Returns:
-        EvaluationResultsResponse с результатами
-    """
-    try:
-        # TODO: Реализовать получение результатов из БД
-        # Пока возвращаем mock данные
-        
-        return EvaluationResultsResponse(
-            run_id=run_id,
-            dataset_name="automotive_tech_channels_v1",
-            model_provider="openrouter",
-            model_name="gpt-4o-mini",
-            total_items=10,
-            successful_items=8,
-            failed_items=2,
-            avg_scores={
-                "answer_correctness": 0.85,
-                "faithfulness": 0.78,
-                "context_relevance": 0.82,
-                "channel_context_awareness": 0.88,
-                "overall_score": 0.83
-            },
-            overall_score=0.83,
-            results=[],  # TODO: Add actual results
-            started_at=datetime.now(timezone.utc),
-            completed_at=datetime.now(timezone.utc),
-            duration_seconds=180.5
-        )
-        
-    except Exception as e:
-        logger.error(f"❌ Failed to get evaluation results: {e}")
-        raise HTTPException(500, f"Failed to get results: {str(e)}")
-
+    @app.get("/evaluation/results/{run_id}")
+    async def get_evaluation_results_disabled(run_id: str):
+        raise HTTPException(status_code=503, detail="Evaluation service temporarily unavailable")
 
 if __name__ == "__main__":
     import uvicorn

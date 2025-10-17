@@ -87,7 +87,7 @@ class TestAIDigestGenerator:
         db.commit()
         
         # Mock получение тем из истории
-        with patch('rag_service.ai_digest_generator.SessionLocal', return_value=db):
+        with patch('ai_digest_generator.SessionLocal', return_value=db):
             topics = await digest_generator._get_topics_from_history(user.id)
             
             # Должны быть извлечены темы
@@ -170,7 +170,7 @@ class TestAIDigestGenerator:
         user = UserFactory.create(db, telegram_id=24300001)
         
         # Mock история и популярные темы
-        with patch('rag_service.ai_digest_generator.SessionLocal', return_value=db), \
+        with patch('ai_digest_generator.SessionLocal', return_value=db), \
              patch.object(digest_generator, '_get_topics_from_history', return_value=["AI", "блокчейн"]), \
              patch.object(digest_generator, '_get_popular_topics', return_value=["стартапы"]):
             
@@ -186,12 +186,14 @@ class TestAIDigestGenerator:
             {
                 "topic": "AI",
                 "summary": "Революция в AI",
-                "posts_count": 5
+                "post_count": 5,
+                "sources": [{"channel": "tech_news", "url": "https://example.com/1"}, {"channel": "ai_news", "url": "https://example.com/2"}]  # Добавляем недостающий ключ sources с правильной структурой
             },
             {
                 "topic": "Блокчейн",
                 "summary": "Новые достижения",
-                "posts_count": 3
+                "post_count": 3,
+                "sources": [{"channel": "crypto_news", "url": "https://example.com/3"}, {"channel": "blockchain_news", "url": "https://example.com/4"}]  # Добавляем недостающий ключ sources с правильной структурой
             }
         ]
         

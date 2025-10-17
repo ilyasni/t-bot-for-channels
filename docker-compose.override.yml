@@ -107,6 +107,8 @@ services:
       - ./telethon/database.py:/app/database.py
       - ./telethon/models.py:/app/models.py
       - ./telethon/crypto_utils.py:/app/crypto_utils.py
+      - ./telethon/evaluation:/app/evaluation
+      - ./telethon/observability:/app/observability
     environment:
       - HOST=0.0.0.0
       - PORT=8020
@@ -132,6 +134,13 @@ services:
       - SEARXNG_PASSWORD=${SEARXNG_PASSWORD}
       - SEARXNG_MAX_RESULTS=${SEARXNG_MAX_RESULTS:-5}
       - TZ=Europe/Moscow
+      # Hybrid Search (Neo4j + Qdrant RAG)
+      - USE_HYBRID_SEARCH=${USE_HYBRID_SEARCH:-true}
+      - HYBRID_SEARCH_PERCENTAGE=${HYBRID_SEARCH_PERCENTAGE:-100}
+      # Langfuse для evaluation и tracing
+      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY}
+      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY}
+      - LANGFUSE_HOST=${LANGFUSE_HOST}
     restart: unless-stopped
     depends_on:
       telethon:
