@@ -15,6 +15,9 @@ COPY requirements.txt .
 # Установка Python зависимостей
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Установка LangChain зависимостей для прямой интеграции
+RUN pip install --no-cache-dir langchain>=0.1.0 langchain-core>=0.1.0 langchain-community>=0.0.38
+
 # Копирование исходного кода
 COPY . .
 

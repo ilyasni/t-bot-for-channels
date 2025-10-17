@@ -70,6 +70,69 @@ x-init-ollama: &init-ollama
     - "sleep 3; OLLAMA_HOST=ollama:11434 ollama pull qwen2.5:7b-instruct-q4_K_M; OLLAMA_HOST=ollama:11434 ollama pull nomic-embed-text"
 
 services:
+  telethon:
+    build:
+      context: ./telethon
+      dockerfile: Dockerfile.telethon
+    container_name: telethon
+    restart: unless-stopped
+    environment:
+      # Database
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/postgres
+      
+      # Telegram Bot
+      BOT_TOKEN: ${BOT_TOKEN}
+      MASTER_API_ID: ${MASTER_API_ID}
+      MASTER_API_HASH: ${MASTER_API_HASH}
+      
+      # LangChain Direct Integration
+      USE_LANGCHAIN_DIRECT: ${USE_LANGCHAIN_DIRECT:-false}
+      
+      # Langfuse для observability (опционально)
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      LANGFUSE_HOST: ${LANGFUSE_HOST:-https://langfuse.produman.studio}
+      
+      # GigaChat настройки
+      GIGACHAT_BASE_URL: ${GIGACHAT_BASE_URL:-http://gpt2giga-proxy:8000/v1}
+      GIGACHAT_TIMEOUT: ${GIGACHAT_TIMEOUT:-60.0}
+      
+      # n8n fallback настройки
+      N8N_GROUP_DIGEST_WEBHOOK: ${N8N_GROUP_DIGEST_WEBHOOK:-http://n8n:5678/webhook/group-digest}
+      N8N_GROUP_DIGEST_WEBHOOK_V2: ${N8N_GROUP_DIGEST_WEBHOOK_V2:-http://n8n:5678/webhook/group-digest-v2}
+      N8N_DIGEST_TIMEOUT: ${N8N_DIGEST_TIMEOUT:-120}
+      N8N_DIGEST_TIMEOUT_V2: ${N8N_DIGEST_TIMEOUT_V2:-180}
+      
+      # Redis
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+      
+      # Security
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      
+      # Performance
+      DIGEST_MAX_MESSAGES: ${DIGEST_MAX_MESSAGES:-200}
+      
+      # RAG Service
+      RAG_SERVICE_URL: http://rag-service:8020
+      RAG_SERVICE_ENABLED: true
+      
+      # Update Logging
+      LOG_INCOMING_UPDATES: ${LOG_INCOMING_UPDATES:-false}
+      
+    depends_on:
+      - postgres
+      - redis
+      - gpt2giga-proxy
+    volumes:
+      - ./telethon/sessions:/app/sessions
+      - ./telethon/logs:/app/logs
+      - ./telethon/data:/app/data
+    ports:
+      - "8010:8010"
+    networks:
+      - default
+
   flowise:
     image: flowiseai/flowise
     restart: unless-stopped

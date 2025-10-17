@@ -152,6 +152,105 @@ def init_metrics():
         logger.info("⚠️ Prometheus metrics disabled")
 
 
+# ============================================================================
+# Evaluation Metrics (добавлено из evaluation/metrics.py)
+# ============================================================================
+
+# Answer Correctness Distribution
+evaluation_answer_correctness = Histogram(
+    'bot_evaluation_answer_correctness',
+    'Answer correctness score distribution (0.0-1.0)',
+    ['dataset', 'category', 'model_provider'],
+    buckets=[0.0, 0.3, 0.5, 0.7, 0.8, 0.9, 0.95, 0.98, 1.0]
+)
+
+# Faithfulness Distribution
+evaluation_faithfulness = Histogram(
+    'bot_evaluation_faithfulness',
+    'Faithfulness to context score distribution (0.0-1.0)',
+    ['dataset', 'category', 'model_provider'],
+    buckets=[0.0, 0.3, 0.5, 0.7, 0.8, 0.9, 0.95, 0.98, 1.0]
+)
+
+# Context Relevance Distribution  
+evaluation_context_relevance = Histogram(
+    'bot_evaluation_context_relevance',
+    'Context relevance score distribution (0.0-1.0)',
+    ['dataset', 'category', 'model_provider'],
+    buckets=[0.0, 0.3, 0.5, 0.7, 0.8, 0.9, 0.95, 0.98, 1.0]
+)
+
+# Telegram-specific Custom Metrics
+evaluation_channel_context_awareness = Histogram(
+    'bot_evaluation_channel_context_awareness',
+    'Channel context awareness score (0.0-1.0)',
+    ['dataset', 'category', 'model_provider'],
+    buckets=[0.0, 0.3, 0.5, 0.7, 0.8, 0.9, 0.95, 0.98, 1.0]
+)
+
+evaluation_group_synthesis_quality = Histogram(
+    'bot_evaluation_group_synthesis_quality',
+    'Group synthesis quality score (0.0-1.0)',
+    ['dataset', 'category', 'model_provider'],
+    buckets=[0.0, 0.3, 0.5, 0.7, 0.8, 0.9, 0.95, 0.98, 1.0]
+)
+
+evaluation_multi_source_coherence = Histogram(
+    'bot_evaluation_multi_source_coherence',
+    'Multi-source coherence score (0.0-1.0)',
+    ['dataset', 'category', 'model_provider'],
+    buckets=[0.0, 0.3, 0.5, 0.7, 0.8, 0.9, 0.95, 0.98, 1.0]
+)
+
+# Evaluation Runs Counter
+evaluation_runs_total = Counter(
+    'bot_evaluation_runs_total',
+    'Total evaluation runs completed',
+    ['dataset', 'model_provider', 'status']
+)
+
+# Evaluation Duration
+evaluation_duration_seconds = Histogram(
+    'bot_evaluation_duration_seconds',
+    'Evaluation run duration in seconds',
+    ['dataset', 'model_provider'],
+    buckets=[10, 30, 60, 120, 300, 600, 900, 1800]
+)
+
+# Current Evaluation Runs (Gauge)
+evaluation_runs_active = Gauge(
+    'bot_evaluation_runs_active',
+    'Number of currently active evaluation runs'
+)
+
+# Evaluation Items Processed
+evaluation_items_processed = Counter(
+    'bot_evaluation_items_processed_total',
+    'Total evaluation items processed',
+    ['dataset', 'model_provider', 'status']
+)
+
+
+def init_evaluation_metrics():
+    """
+    Инициализация evaluation метрик при запуске приложения
+    """
+    if ENABLED:
+        logger.info("✅ Evaluation Prometheus metrics initialized")
+        logger.info(f"   Answer Correctness: {evaluation_answer_correctness._name}")
+        logger.info(f"   Faithfulness: {evaluation_faithfulness._name}")
+        logger.info(f"   Channel Context Awareness: {evaluation_channel_context_awareness._name}")
+        logger.info(f"   Group Synthesis Quality: {evaluation_group_synthesis_quality._name}")
+        logger.info(f"   Multi-Source Coherence: {evaluation_multi_source_coherence._name}")
+        logger.info(f"   Runs Counter: {evaluation_runs_total._name}")
+        logger.info(f"   Duration: {evaluation_duration_seconds._name}")
+        logger.info(f"   Active Runs: {evaluation_runs_active._name}")
+        logger.info(f"   Items Processed: {evaluation_items_processed._name}")
+    else:
+        logger.info("⚠️ Evaluation Prometheus metrics disabled")
+
+
 # Автоинициализация при импорте
 init_metrics()
+init_evaluation_metrics()
 

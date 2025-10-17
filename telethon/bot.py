@@ -1,7 +1,7 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackQueryHandler, 
-    ContextTypes, filters, PicklePersistence
+    ContextTypes, filters, PicklePersistence, TypeHandler
 )
 from sqlalchemy.orm import Session
 from database import get_db, SessionLocal
@@ -15,6 +15,7 @@ import time
 import logging
 import httpx
 import asyncio
+import json
 from dotenv import load_dotenv
 
 # Импорты новых модулей
@@ -22,7 +23,9 @@ from bot_login_handlers_qr import get_login_conversation_handler, subscription_c
 from bot_admin_handlers import (
     admin_invite_command, admin_users_command, admin_user_command,
     admin_grant_command, admin_stats_command, get_admin_callback_handler,
-    admin_panel_command
+    admin_panel_command,
+    admin_evaluate_command, admin_evaluate_status_command, 
+    admin_evaluate_results_command, admin_evaluate_datasets_command
 )
 from bot_debug_commands import (
     debug_test_phone_command, debug_check_sessions_command, debug_force_auth_command,
@@ -212,6 +215,15 @@ class TelegramBot:
         """Настройка обработчиков команд"""
         logger.info("🔧 Настройка обработчиков команд...")
         
+        # ✅ НОВОЕ: Логирование всех входящих updates (должен быть ПЕРВЫМ!)
+        if os.getenv('LOG_INCOMING_UPDATES', 'false').lower() == 'true':
+            from bot_update_logger import log_all_updates_handler
+            self.application.add_handler(
+                TypeHandler(Update, log_all_updates_handler), 
+                group=-1  # Высший приоритет - выполняется перед всеми handlers
+            )
+            logger.info("  ✅ Update Logger включен (group=-1)")
+        
         # ✅ НОВОЕ: ConversationHandler для /login (должен быть первым!)
         self.application.add_handler(get_login_conversation_handler())
         logger.info("  ✅ ConversationHandler для /login зарегистрирован")
@@ -245,6 +257,13 @@ class TelegramBot:
         self.application.add_handler(CommandHandler("admin_user", admin_user_command))
         self.application.add_handler(CommandHandler("admin_grant", admin_grant_command))
         self.application.add_handler(CommandHandler("admin_stats", admin_stats_command))
+        
+        # ✅ НОВОЕ: Evaluation команды
+        self.application.add_handler(CommandHandler("evaluate", admin_evaluate_command))
+        self.application.add_handler(CommandHandler("evaluate_status", admin_evaluate_status_command))
+        self.application.add_handler(CommandHandler("evaluate_results", admin_evaluate_results_command))
+        self.application.add_handler(CommandHandler("evaluate_datasets", admin_evaluate_datasets_command))
+        logger.info("  ✅ Evaluation команды зарегистрированы")
         
         # ✅ НОВОЕ: Debug команды
         self.application.add_handler(CommandHandler("debug_status", self.debug_status_command))
@@ -1549,6 +1568,12 @@ class TelegramBot:
         elif query.data.startswith("voice_search:"):
             logger.info(f"  → Обработка voice_search callback")
             await self.handle_voice_search_callback(query, context)
+        elif query.data == "voice_ask_fallback":
+            logger.info(f"  → Обработка voice_ask_fallback callback")
+            await self.handle_voice_fallback_callback(query, context, "ask")
+        elif query.data == "voice_search_fallback":
+            logger.info(f"  → Обработка voice_search_fallback callback")
+            await self.handle_voice_fallback_callback(query, context, "search")
         elif query.data.startswith("digest_"):
             logger.info(f"  → Обработка digest callback: {query.data}")
             await self.handle_digest_callback(query, context)
@@ -1719,6 +1744,39 @@ class TelegramBot:
         """Обработка текстовых сообщений"""
         user = update.effective_user
         text = update.message.text
+        
+        # Обработка fallback режима для голосовых команд
+        if context.user_data.get('voice_fallback_mode') and context.user_data.get('waiting_for_text'):
+            command = context.user_data['waiting_for_text']
+            logger.info(f"🎤 Обработка текста в fallback режиме для /{command}: {text[:50]}...")
+            
+            # Получаем пользователя
+            db = SessionLocal()
+            try:
+                db_user = db.query(User).filter(User.telegram_id == user.id).first()
+                if not db_user:
+                    await update.message.reply_text("❌ Пользователь не найден")
+                    return
+                
+                # Выполняем команду с текстом
+                if command == 'ask':
+                    await self._execute_ask_with_text(update, context, text, db_user)
+                elif command == 'search':
+                    await self._execute_search_with_text(update, context, text, db_user)
+                
+                # Очищаем fallback состояние
+                context.user_data.pop('voice_fallback_mode', None)
+                context.user_data.pop('waiting_for_text', None)
+                
+                logger.info(f"✅ Fallback режим завершен для /{command}")
+                
+            except Exception as e:
+                logger.error(f"❌ Ошибка в fallback режиме: {e}")
+                await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+            finally:
+                db.close()
+            
+            return
         
         # Обработка кнопок режима голосовых команд
         if text in ["🤖 AI режим", "💡 Ask режим", "🔍 Search режим"]:
@@ -1955,21 +2013,25 @@ class TelegramBot:
             answer = result.get("answer", "Не удалось сгенерировать ответ")
             sources = result.get("sources", [])
             
-            # Форматируем ответ
-            response_text = f"💡 **Ответ:**\n\n{answer}\n\n"
+            # Форматируем ответ с использованием format_rag_answer
+            from telegram_formatter import format_rag_answer
             
+            # Преобразуем источники в нужный формат
+            formatted_sources = []
             if sources:
-                response_text += "📚 **Источники:**\n"
-                for i, source in enumerate(sources[:5], 1):
-                    channel = source.get("channel", "Неизвестный канал")
-                    url = source.get("url", "#")
-                    score = source.get("score", 0) * 100
-                    response_text += f"{i}. [{channel}]({url}) (релевантность: {score:.0f}%)\n"
-            else:
-                response_text += "\n💡 Источники не найдены. Попробуйте изменить запрос."
+                for source in sources[:5]:
+                    formatted_sources.append({
+                        'url': source.get("url", "#"),
+                        'channel_username': source.get("channel", "Неизвестный канал"),
+                        'posted_at': source.get("posted_at", ""),
+                        'excerpt': source.get("excerpt", source.get("text", ""))[:100]
+                    })
+            
+            # Форматируем ответ с источниками
+            formatted_response = format_rag_answer(answer, formatted_sources)
             
             await update.message.reply_text(
-                response_text,
+                formatted_response,
                 parse_mode='HTML',
                 disable_web_page_preview=True
             )
@@ -2146,27 +2208,10 @@ class TelegramBot:
                 'timestamp': time.time()
             }
             
-            # Форматируем ответ
-            response_text = f"🔍 **Результаты поиска:** {query_text}\n\n"
+            # Форматируем ответ с использованием новой функции
+            from telegram_formatter import format_search_results
             
-            if posts:
-                response_text += f"📱 **Ваши посты ({len(posts)}):**\n"
-                for i, post in enumerate(posts[:3], 1):
-                    channel = post.get("channel", "Неизвестный канал")
-                    snippet = post.get("snippet", post.get("text", ""))[:100]
-                    url = post.get("url", "#")
-                    response_text += f"{i}. [{channel}]({url})\n   {snippet}...\n\n"
-            else:
-                response_text += "📱 **Ваши посты:** Не найдено\n\n"
-            
-            if web_results:
-                response_text += f"🌐 **Интернет ({len(web_results)}):**\n"
-                for i, web in enumerate(web_results[:3], 1):
-                    title = web.get("title", "Без названия")
-                    url = web.get("url", "#")
-                    response_text += f"{i}. [{title}]({url})\n\n"
-            else:
-                response_text += "🌐 **Интернет:** Не найдено\n\n"
+            response_text = format_search_results(query_text, posts, web_results)
             
             # Добавляем кнопки фильтрации (без текста запроса в callback_data)
             keyboard = [
@@ -2476,9 +2521,15 @@ class TelegramBot:
             
             # 6. Проверка доступности сервиса
             if not voice_transcription_service.is_enabled():
+                logger.warning("⚠️ Voice transcription service disabled or unavailable")
                 await update.message.reply_text(
                     "❌ Сервис транскрибации временно недоступен\n\n"
-                    "💡 Попробуйте позже или используйте текстовые команды"
+                    "💡 Попробуйте позже или используйте текстовые команды\n\n"
+                    f"🔄 Или выберите команду вручную:",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("💡 /ask - RAG поиск", callback_data="voice_ask_fallback")],
+                        [InlineKeyboardButton("🔍 /search - Гибридный поиск", callback_data="voice_search_fallback")]
+                    ])
                 )
                 return
             
@@ -2490,23 +2541,34 @@ class TelegramBot:
             
             try:
                 # 8. Скачиваем голосовое
+                logger.info(f"📥 Скачивание голосового сообщения (длительность: {duration}s)")
                 voice_file = await voice.get_file()
                 voice_bytes = await voice_file.download_as_bytearray()
+                logger.info(f"✅ Голосовое скачано: {len(voice_bytes)} байт")
                 
                 # 9. Транскрибация через SaluteSpeech
+                logger.info("🎤 Начинаю транскрибацию...")
                 transcription = await voice_transcription_service.transcribe_voice_message(
                     bytes(voice_bytes),
                     duration
                 )
                 
                 if not transcription:
+                    logger.warning("⚠️ Транскрипция пустая или None")
                     await status_message.edit_text(
                         "❌ Не удалось распознать речь в голосовом сообщении\n\n"
                         "💡 Попробуйте:\n"
                         "• Говорить четче и медленнее\n"
                         "• Записать в тихом месте\n"
-                        "• Использовать текстовую команду"
+                        "• Использовать текстовую команду\n\n"
+                        "🔄 Или выберите команду вручную:",
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("💡 /ask - RAG поиск", callback_data="voice_ask_fallback")],
+                            [InlineKeyboardButton("🔍 /search - Гибридный поиск", callback_data="voice_search_fallback")]
+                        ])
                     )
+                    # Сохраняем контекст для fallback
+                    context.user_data['voice_fallback'] = True
                     return
                 
                 # 10. Увеличиваем счетчик
@@ -2593,18 +2655,61 @@ class TelegramBot:
                         context.user_data['voice_transcription'] = transcription
             
             except ValueError as e:
-                # Ошибка длительности
-                await status_message.edit_text(f"❌ {str(e)}")
-            except TimeoutError:
+                # Ошибка длительности или других параметров
+                logger.error(f"❌ ValueError при обработке голосового: {e}")
+                await status_message.edit_text(
+                    f"❌ {str(e)}\n\n"
+                    f"💡 Попробуйте записать более короткое сообщение или используйте текстовую команду"
+                )
+            except TimeoutError as e:
+                logger.error(f"⏰ Timeout транскрибации: {e}")
                 await status_message.edit_text(
                     "⏰ Timeout транскрибации\n\n"
-                    "💡 Попробуйте записать более короткое сообщение"
+                    "💡 Попробуйте:\n"
+                    "• Записать более короткое сообщение\n"
+                    "• Проверить интернет-соединение\n"
+                    "• Использовать текстовую команду\n\n"
+                    "🔄 Или выберите команду вручную:",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("💡 /ask - RAG поиск", callback_data="voice_ask_fallback")],
+                        [InlineKeyboardButton("🔍 /search - Гибридный поиск", callback_data="voice_search_fallback")]
+                    ])
+                )
+            except httpx.HTTPStatusError as e:
+                logger.error(f"🌐 HTTP ошибка транскрибации: {e.response.status_code} - {e.response.text}")
+                await status_message.edit_text(
+                    f"🌐 Ошибка сервиса транскрибации (HTTP {e.response.status_code})\n\n"
+                    f"💡 Попробуйте позже или используйте текстовую команду\n\n"
+                    f"🔄 Или выберите команду вручную:",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("💡 /ask - RAG поиск", callback_data="voice_ask_fallback")],
+                        [InlineKeyboardButton("🔍 /search - Гибридный поиск", callback_data="voice_search_fallback")]
+                    ])
+                )
+            except httpx.ConnectError as e:
+                logger.error(f"🔌 Ошибка подключения к сервису транскрибации: {e}")
+                await status_message.edit_text(
+                    "🔌 Сервис транскрибации временно недоступен\n\n"
+                    "💡 Попробуйте позже или используйте текстовую команду\n\n"
+                    f"🔄 Или выберите команду вручную:",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("💡 /ask - RAG поиск", callback_data="voice_ask_fallback")],
+                        [InlineKeyboardButton("🔍 /search - Гибридный поиск", callback_data="voice_search_fallback")]
+                    ])
                 )
             except Exception as e:
-                logger.error(f"❌ Ошибка обработки голосового: {e}")
+                logger.error(f"❌ Неожиданная ошибка обработки голосового: {type(e).__name__}: {e}")
+                logger.error(f"   Детали ошибки: {str(e)}")
                 await status_message.edit_text(
-                    f"❌ Ошибка обработки голосового сообщения\n\n"
-                    f"💡 Попробуйте еще раз или используйте текстовую команду"
+                    f"❌ Произошла ошибка при обработке голосового сообщения\n\n"
+                    f"💡 Попробуйте:\n"
+                    f"• Записать сообщение заново\n"
+                    f"• Использовать текстовую команду\n\n"
+                    f"🔄 Или выберите команду вручную:",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("💡 /ask - RAG поиск", callback_data="voice_ask_fallback")],
+                        [InlineKeyboardButton("🔍 /search - Гибридный поиск", callback_data="voice_search_fallback")]
+                    ])
                 )
         
         finally:
@@ -2612,7 +2717,7 @@ class TelegramBot:
     
     async def _classify_voice_command(self, transcription: str, user_id: int) -> Optional[Dict]:
         """
-        Классифицировать голосовую команду через n8n AI агента
+        Классифицировать голосовую команду через n8n AI агента с fallback на прямую классификацию
         
         Args:
             transcription: Транскрипция голосового сообщения
@@ -2629,6 +2734,7 @@ class TelegramBot:
             logger.info("🤖 AI классификатор отключен в конфигурации")
             return None
         
+        # Сначала пробуем n8n
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.post(
@@ -2645,23 +2751,157 @@ class TelegramBot:
                     # Проверяем что result содержит command
                     if result and result.get('command'):
                         logger.info(
-                            f"🤖 AI classification: {result.get('command')} "
+                            f"🤖 AI classification (n8n): {result.get('command')} "
                             f"({result.get('confidence', 0):.0%})"
                         )
                         return result
                     else:
                         logger.error(f"❌ n8n classifier returned invalid response: {result}")
-                        return None
+                        # Fallback на прямую классификацию
+                        return await self._classify_voice_command_direct(transcription)
                 else:
                     logger.error(f"❌ n8n classifier error {response.status_code}: {response.text}")
-                    return None
+                    # Fallback на прямую классификацию
+                    return await self._classify_voice_command_direct(transcription)
         
         except httpx.TimeoutException:
-            logger.error("⏰ n8n classifier timeout")
-            return None
+            logger.error("⏰ n8n classifier timeout, fallback to direct classification")
+            return await self._classify_voice_command_direct(transcription)
         except Exception as e:
-            logger.error(f"❌ Error calling n8n classifier: {e}")
-            return None
+            logger.error(f"❌ Error calling n8n classifier: {e}, fallback to direct classification")
+            return await self._classify_voice_command_direct(transcription)
+    
+    async def _classify_voice_command_direct(self, transcription: str) -> Optional[Dict]:
+        """
+        Прямая классификация голосовой команды через GigaChat (fallback)
+        
+        Args:
+            transcription: Транскрипция голосового сообщения
+            
+        Returns:
+            Dict с полями: command, confidence, reasoning
+            или None если классификация не удалась
+        """
+        try:
+            logger.info(f"🤖 Прямая классификация голосовой команды: {transcription[:50]}...")
+            
+            prompt = f"""Ты — классификатор голосовых команд для Telegram бота.
+
+Доступные команды:
+1. /ask — поиск ответа в сохраненных постах пользователя (RAG)
+   - Вопросы: "Что писали про...", "Расскажи о...", "Какие новости..."
+   - Требует анализа и генерации ответа
+
+2. /search — гибридный поиск (посты + интернет)
+   - Запросы: "Найди информацию о...", "Что такое...", "Где найти..."
+   - Информационный поиск с источниками
+
+Транскрипция голосового сообщения:
+"{transcription}"
+
+Задача:
+Определи наиболее подходящую команду для этого запроса.
+
+Верни ТОЛЬКО JSON:
+{{
+  "command": "ask" или "search",
+  "confidence": 0.0-1.0,
+  "reasoning": "краткое объяснение выбора"
+}}"""
+            
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                request_body = {
+                    'model': 'GigaChat',
+                    'messages': [
+                        {
+                            'role': 'system',
+                            'content': 'Ты — эксперт по классификации пользовательских запросов. Отвечай строго в формате JSON.'
+                        },
+                        {
+                            'role': 'user',
+                            'content': prompt
+                        }
+                    ],
+                    'temperature': 0.1,
+                    'max_tokens': 150
+                }
+                
+                response = await client.post(
+                    'http://gpt2giga-proxy:8090/v1/chat/completions',
+                    json=request_body,
+                    timeout=15.0
+                )
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    content = result.get('choices', [{}])[0].get('message', {}).get('content', '{}')
+                    
+                    # Очищаем от markdown backticks если есть
+                    cleaned = content.strip()
+                    if cleaned.startswith('```json'):
+                        cleaned = cleaned.replace('```json', '').replace('```', '').strip()
+                    elif cleaned.startswith('```'):
+                        cleaned = cleaned.replace('```', '').strip()
+                    
+                    try:
+                        classification = json.loads(cleaned)
+                        
+                        # Валидация
+                        valid_commands = ['ask', 'search']
+                        command = classification.get('command') if classification.get('command') in valid_commands else 'ask'
+                        confidence = min(max(classification.get('confidence', 0.5), 0), 1)
+                        
+                        result = {
+                            'command': command,
+                            'confidence': confidence,
+                            'reasoning': classification.get('reasoning', 'Direct classification via GigaChat')
+                        }
+                        
+                        logger.info(
+                            f"🤖 AI classification (direct): {result['command']} "
+                            f"({result['confidence']:.0%})"
+                        )
+                        
+                        return result
+                        
+                    except json.JSONDecodeError as e:
+                        logger.error(f"❌ JSON parsing error in direct classification: {e}")
+                        # Fallback на эвристику
+                        return self._classify_voice_command_heuristic(transcription)
+                else:
+                    logger.error(f"❌ HTTP error in direct classification: {response.status_code}")
+                    return self._classify_voice_command_heuristic(transcription)
+                    
+        except Exception as e:
+            logger.error(f"❌ Error in direct classification: {e}")
+            return self._classify_voice_command_heuristic(transcription)
+    
+    def _classify_voice_command_heuristic(self, transcription: str) -> Dict:
+        """
+        Эвристическая классификация голосовой команды (последний fallback)
+        
+        Args:
+            transcription: Транскрипция голосового сообщения
+            
+        Returns:
+            Dict с полями: command, confidence, reasoning
+        """
+        transcription_lower = transcription.lower()
+        
+        # Ключевые слова для search
+        search_keywords = ['найди', 'найти', 'поиск', 'что такое', 'где найти', 'покажи', 'информацию о']
+        is_search = any(keyword in transcription_lower for keyword in search_keywords)
+        
+        command = 'search' if is_search else 'ask'
+        confidence = 0.6  # Низкая уверенность для эвристики
+        
+        logger.info(f"🤖 AI classification (heuristic): {command} ({confidence:.0%})")
+        
+        return {
+            'command': command,
+            'confidence': confidence,
+            'reasoning': f'Heuristic classification: {"search keywords detected" if is_search else "default to ask"}'
+        }
     
     async def _execute_ask_with_text(
         self,
@@ -2731,32 +2971,14 @@ class TelegramBot:
                 limit=5
             )
             
-            response_text = f"🔍 Результаты поиска: \"{query_text}\"\n\n"
+            from telegram_formatter import format_search_results
             
-            # Посты пользователя
-            if hybrid_result and hybrid_result.get("posts"):
-                posts = hybrid_result["posts"]
-                response_text += f"📱 Ваши посты ({len(posts)}):\n"
-                for i, post in enumerate(posts[:5], 1):
-                    channel = post.get("channel", "Unknown")
-                    score = int(post.get("score", 0) * 100)
-                    snippet = post.get("snippet", post.get("text", ""))[:80]
-                    response_text += f"{i}. @{channel} ({score}%)\n   {snippet}...\n\n"
-            else:
-                response_text += "📱 Ваши посты: Ничего не найдено\n\n"
+            posts = hybrid_result.get("posts", []) if hybrid_result else []
+            web_results = hybrid_result.get("web", []) if hybrid_result else []
             
-            # Интернет (реальные результаты из SearXNG)
-            if hybrid_result and hybrid_result.get("web"):
-                web_results = hybrid_result["web"]
-                response_text += f"🌐 Интернет ({len(web_results)}):\n"
-                for i, web in enumerate(web_results[:3], 1):
-                    title = web.get("title", "Без названия")[:70]
-                    url = web.get("url", "#")
-                    response_text += f"{i}. {title}\n   {url}\n\n"
-            else:
-                response_text += "🌐 Интернет: Ничего не найдено"
+            response_text = format_search_results(query_text, posts, web_results)
             
-            await update.message.reply_text(response_text)
+            await update.message.reply_text(response_text, parse_mode='HTML')
         
         except Exception as e:
             logger.error(f"❌ Ошибка _execute_search_with_text: {e}")
@@ -3442,6 +3664,77 @@ class TelegramBot:
         except Exception as e:
             logger.error(f"Debug reset error: {e}")
             await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+        finally:
+            db.close()
+    
+    async def handle_voice_fallback_callback(self, query, context: ContextTypes.DEFAULT_TYPE, command: str):
+        """
+        Обработка fallback кнопок при ошибках транскрибации
+        
+        Args:
+            query: CallbackQuery объект
+            context: ContextTypes.DEFAULT_TYPE
+            command: "ask" или "search"
+        """
+        user = query.from_user
+        db = SessionLocal()
+        
+        try:
+            # Получаем пользователя
+            db_user = db.query(User).filter(User.telegram_id == user.id).first()
+            if not db_user:
+                await query.answer("❌ Пользователь не найден")
+                return
+            
+            # Проверяем аутентификацию
+            if not db_user.is_authenticated:
+                await query.answer("❌ Необходима аутентификация. Используйте /login <INVITE_CODE>")
+                return
+            
+            # Проверяем подписку
+            tier = SUBSCRIPTION_TIERS.get(db_user.subscription_type, {})
+            voice_enabled = tier.get("voice_transcription_enabled", False)
+            
+            if not voice_enabled:
+                await query.answer("❌ Голосовые команды доступны только для Premium/Enterprise")
+                return
+            
+            # Проверяем лимиты
+            voice_limit = tier.get("voice_queries_per_day", 0)
+            
+            # Reset счетчика если новый день
+            now = datetime.now(timezone.utc)
+            if db_user.voice_queries_reset_at is None or db_user.voice_queries_reset_at < now:
+                db_user.voice_queries_today = 0
+                db_user.voice_queries_reset_at = now.replace(
+                    hour=0, minute=0, second=0, microsecond=0
+                ) + timedelta(days=1)
+                db.commit()
+            
+            if db_user.voice_queries_today >= voice_limit:
+                await query.answer(f"❌ Достигнут дневной лимит: {voice_limit}")
+                return
+            
+            # Увеличиваем счетчик
+            db_user.voice_queries_today += 1
+            db.commit()
+            
+            # Обновляем сообщение
+            await query.edit_message_text(
+                f"🎤 Голосовое сообщение получено\n\n"
+                f"🔄 Выполняю команду /{command}...\n"
+                f"💡 Введите ваш вопрос текстом:"
+            )
+            
+            # Сохраняем состояние ожидания текста
+            context.user_data['waiting_for_text'] = command
+            context.user_data['voice_fallback_mode'] = True
+            
+            logger.info(f"✅ Fallback режим активирован для /{command}, ожидаем текст от пользователя {user.id}")
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка handle_voice_fallback_callback: {e}")
+            await query.answer(f"❌ Ошибка: {str(e)}")
         finally:
             db.close()
     

@@ -2,13 +2,54 @@
 title: "Cursor Rules Changelog"
 description: "История изменений правил для Telegram Bot"
 tags: ["changelog", "versioning"]
-version: "3.4"
+version: "3.5"
 priority: low
 ruleType: "manual"
 autoAttach: false
 ---
 
 # Cursor Rules Changelog
+
+## [3.5.0] - 2025-01-15
+
+### 🎯 LLM Evaluation System Release
+
+**🆕 New Module:**
+- ✅ **12-evaluation.mdc** (520 lines) - LLM Evaluation System
+  - Ragas integration для оценки качества ответов
+  - Golden datasets management (CRUD операции)
+  - Custom Telegram-specific metrics
+  - Prometheus metrics и Grafana dashboards
+  - Admin commands и CLI tools
+  - Langfuse integration для observability
+
+**🔄 Updates:**
+- ✅ Обновлен `.cursorrules` до версии 3.5.0
+  - Добавлена информация о LLM Evaluation System
+  - Обновлен список модулей (12 файлов)
+  - Добавлена навигация для evaluation задач
+- ✅ Обновлен `04-development.mdc`
+  - Добавлены тесты для evaluation системы
+  - Примеры unit тестов для schemas, golden_dataset_manager, bot_evaluator
+  - Команды для запуска evaluation тестов
+- ✅ Добавлены comprehensive unit тесты
+  - `test_evaluation_schemas.py` - Pydantic модели
+  - `test_golden_dataset_manager.py` - CRUD операции
+  - `test_bot_evaluator.py` - Ragas integration
+  - `test_evaluation_runner.py` - Batch evaluation orchestration
+
+**🧪 Testing Enhancements:**
+- ✅ Полное покрытие тестами evaluation системы
+- ✅ Mock-тестирование для Ragas dependencies
+- ✅ Async/await patterns в тестах
+- ✅ Error handling scenarios
+- ✅ Concurrency testing для batch evaluations
+
+**📊 Monitoring & Observability:**
+- ✅ Prometheus metrics для evaluation scores
+- ✅ Grafana dashboard для visualization
+- ✅ Langfuse integration для trace tracking
+- ✅ Admin commands для monitoring через Telegram
 
 ## [3.4.0] - 2025-10-15
 

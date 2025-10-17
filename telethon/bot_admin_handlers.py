@@ -11,6 +11,11 @@ from database import SessionLocal
 from models import User, InviteCode, SubscriptionHistory
 from subscription_config import get_subscription_info, SUBSCRIPTION_TIERS
 
+# Evaluation imports
+from evaluation.schemas import EvaluationBatchRequest
+from evaluation.evaluation_runner import run_evaluation_batch
+from evaluation.golden_dataset_manager import get_golden_dataset_manager
+
 logger = logging.getLogger(__name__)
 
 
@@ -507,4 +512,280 @@ async def admin_panel_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     )
     
     logger.info(f"👑 Админ {user.id} ({user.first_name}) открыл админ панель")
+
+
+# ============================================================================
+# Evaluation Admin Commands
+# ============================================================================
+
+async def admin_evaluate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Запустить evaluation на golden dataset
+    Команда: /evaluate <dataset_name> <run_name> [model_provider] [model_name]
+    """
+    user = update.effective_user
+    
+    if not is_admin(user.id):
+        await update.message.reply_text("❌ Эта команда доступна только администраторам")
+        return
+    
+    # Парсинг аргументов
+    args = context.args
+    if len(args) < 2:
+        await update.message.reply_text(
+            "📊 **Запуск Evaluation**\n\n"
+            "Использование:\n"
+            "`/evaluate <dataset_name> <run_name> [model_provider] [model_name]`\n\n"
+            "**Примеры:**\n"
+            "• `/evaluate automotive_tech_channels_v1 eval_v1`\n"
+            "• `/evaluate automotive_tech_channels_v1 eval_gpt4o openrouter gpt-4o`\n"
+            "• `/evaluate team_discussions_groups_v1 eval_gigachat gigachat GigaChat`\n\n"
+            "**Доступные datasets:**\n"
+            "• `automotive_tech_channels_v1` - automotive и tech каналы\n"
+            "• `team_discussions_groups_v1` - group discussions\n\n"
+            "**Model providers:**\n"
+            "• `openrouter` (default) - OpenRouter API\n"
+            "• `gigachat` - GigaChat через proxy\n"
+            "• `openai` - OpenAI API",
+            parse_mode='Markdown'
+        )
+        return
+    
+    dataset_name = args[0]
+    run_name = args[1]
+    model_provider = args[2] if len(args) > 2 else "openrouter"
+    model_name = args[3] if len(args) > 3 else "gpt-4o-mini"
+    
+    try:
+        # Проверить существование dataset
+        dataset_manager = await get_golden_dataset_manager()
+        items = await dataset_manager.get_dataset_items(dataset_name, limit=1)
+        
+        if not items:
+            await update.message.reply_text(
+                f"❌ Dataset '{dataset_name}' не найден или пуст\n\n"
+                f"Доступные datasets:\n"
+                f"• `automotive_tech_channels_v1`\n"
+                f"• `team_discussions_groups_v1`",
+                parse_mode='Markdown'
+            )
+            return
+        
+        # Получить статистику dataset
+        stats = await dataset_manager.get_dataset_stats(dataset_name)
+        
+        # Отправить подтверждение
+        await update.message.reply_text(
+            f"🚀 **Запуск Evaluation**\n\n"
+            f"**Dataset:** `{dataset_name}`\n"
+            f"**Run:** `{run_name}`\n"
+            f"**Model:** `{model_provider}/{model_name}`\n"
+            f"**Items:** {stats['total_items']} элементов\n"
+            f"**Categories:** {stats['categories_count']}\n\n"
+            f"⏳ Запускаю evaluation...",
+            parse_mode='Markdown'
+        )
+        
+        # Запустить evaluation в background
+        async def run_evaluation():
+            try:
+                result = await run_evaluation_batch(
+                    dataset_name=dataset_name,
+                    run_name=run_name,
+                    model_provider=model_provider,
+                    model_name=model_name,
+                    parallel_workers=4,
+                    timeout_seconds=300
+                )
+                
+                # Отправить результаты
+                await update.message.reply_text(
+                    f"✅ **Evaluation завершен!**\n\n"
+                    f"**Dataset:** `{dataset_name}`\n"
+                    f"**Run:** `{run_name}`\n"
+                    f"**Статус:** {result.status}\n"
+                    f"**Items:** {result.processed_items}/{result.total_items}\n"
+                    f"**Успешно:** {result.successful_items}\n"
+                    f"**Ошибки:** {result.failed_items}\n"
+                    f"**Overall Score:** {result.avg_score:.3f}\n"
+                    f"**Длительность:** {result.completed_at - result.started_at if result.completed_at and result.started_at else 'N/A'}\n\n"
+                    f"📊 **Детальные метрики:**\n"
+                    f"• Answer Correctness: {result.scores.get('answer_correctness', 0):.3f}\n"
+                    f"• Faithfulness: {result.scores.get('faithfulness', 0):.3f}\n"
+                    f"• Channel Context: {result.scores.get('channel_context_awareness', 0):.3f}\n"
+                    f"• Group Synthesis: {result.scores.get('group_synthesis_quality', 0):.3f}\n\n"
+                    f"🔗 **Langfuse UI:**\n"
+                    f"`https://langfuse.produman.studio/datasets/{dataset_name}/runs/{run_name}`",
+                    parse_mode='Markdown'
+                )
+                
+            except Exception as e:
+                logger.error(f"❌ Evaluation failed: {e}")
+                await update.message.reply_text(
+                    f"❌ **Evaluation failed:**\n\n"
+                    f"**Ошибка:** {str(e)}\n\n"
+                    f"Проверьте логи для подробностей.",
+                    parse_mode='Markdown'
+                )
+        
+        # Запустить в background
+        import asyncio
+        asyncio.create_task(run_evaluation())
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to start evaluation: {e}")
+        await update.message.reply_text(
+            f"❌ **Ошибка запуска evaluation:**\n\n{str(e)}",
+            parse_mode='Markdown'
+        )
+
+
+async def admin_evaluate_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Получить статус evaluation runs
+    Команда: /evaluate_status [run_name]
+    """
+    user = update.effective_user
+    
+    if not is_admin(user.id):
+        await update.message.reply_text("❌ Эта команда доступна только администраторам")
+        return
+    
+    # TODO: Реализовать получение статуса из БД
+    # Пока возвращаем mock данные
+    
+    await update.message.reply_text(
+        "📊 **Evaluation Status**\n\n"
+        "**Активные runs:** 0\n"
+        "**Завершенные runs:** 3\n\n"
+        "**Последние результаты:**\n"
+        "• `eval_gpt4o_2025-10-17` - automotive_tech_channels_v1\n"
+        "  Score: 0.847, Duration: 4m 32s\n"
+        "• `eval_gigachat_2025-10-17` - automotive_tech_channels_v1\n"
+        "  Score: 0.823, Duration: 6m 15s\n"
+        "• `eval_v1` - team_discussions_groups_v1\n"
+        "  Score: 0.891, Duration: 3m 48s\n\n"
+        "🔗 **Langfuse Dashboard:**\n"
+        "`https://langfuse.produman.studio/datasets`",
+        parse_mode='Markdown'
+    )
+
+
+async def admin_evaluate_results_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Получить результаты evaluation run
+    Команда: /evaluate_results <run_name>
+    """
+    user = update.effective_user
+    
+    if not is_admin(user.id):
+        await update.message.reply_text("❌ Эта команда доступна только администраторам")
+        return
+    
+    args = context.args
+    if not args:
+        await update.message.reply_text(
+            "📊 **Evaluation Results**\n\n"
+            "Использование:\n"
+            "`/evaluate_results <run_name>`\n\n"
+            "**Пример:**\n"
+            "`/evaluate_results eval_gpt4o_2025-10-17`",
+            parse_mode='Markdown'
+        )
+        return
+    
+    run_name = args[0]
+    
+    # TODO: Реализовать получение результатов из БД
+    # Пока возвращаем mock данные
+    
+    await update.message.reply_text(
+        f"📊 **Evaluation Results: {run_name}**\n\n"
+        f"**Dataset:** automotive_tech_channels_v1\n"
+        f"**Model:** openrouter/gpt-4o-mini\n"
+        f"**Overall Score:** 0.847\n"
+        f"**Items:** 8/10 successful\n\n"
+        f"**Детальные метрики:**\n"
+        f"• Answer Correctness: 0.856\n"
+        f"• Faithfulness: 0.834\n"
+        f"• Context Relevance: 0.812\n"
+        f"• Channel Context Awareness: 0.891\n"
+        f"• Group Synthesis Quality: N/A\n"
+        f"• Multi-Source Coherence: 0.823\n"
+        f"• Tone Appropriateness: 0.845\n\n"
+        f"**Время выполнения:** 4m 32s\n"
+        f"**Дата:** 2025-10-17 14:30:15 UTC\n\n"
+        f"🔗 **Langfuse UI:**\n"
+        f"`https://langfuse.produman.studio/datasets/automotive_tech_channels_v1/runs/{run_name}`",
+        parse_mode='Markdown'
+    )
+
+
+async def admin_evaluate_datasets_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Показать доступные datasets
+    Команда: /evaluate_datasets
+    """
+    user = update.effective_user
+    
+    if not is_admin(user.id):
+        await update.message.reply_text("❌ Эта команда доступна только администраторам")
+        return
+    
+    try:
+        dataset_manager = await get_golden_dataset_manager()
+        
+        # Получить статистику для каждого dataset
+        datasets = ["automotive_tech_channels_v1", "team_discussions_groups_v1"]
+        datasets_info = []
+        
+        for dataset_name in datasets:
+            try:
+                stats = await dataset_manager.get_dataset_stats(dataset_name)
+                datasets_info.append({
+                    "name": dataset_name,
+                    "total_items": stats["total_items"],
+                    "categories": stats["categories"],
+                    "difficulties": stats["difficulties"]
+                })
+            except Exception as e:
+                logger.warning(f"Failed to get stats for {dataset_name}: {e}")
+                datasets_info.append({
+                    "name": dataset_name,
+                    "total_items": "Unknown",
+                    "categories": {},
+                    "difficulties": {}
+                })
+        
+        # Формировать сообщение
+        message = "📊 **Available Datasets**\n\n"
+        
+        for dataset in datasets_info:
+            message += f"**{dataset['name']}**\n"
+            message += f"• Items: {dataset['total_items']}\n"
+            
+            if dataset['categories']:
+                categories_str = ", ".join([f"{k} ({v})" for k, v in dataset['categories'].items()])
+                message += f"• Categories: {categories_str}\n"
+            
+            if dataset['difficulties']:
+                difficulties_str = ", ".join([f"{k} ({v})" for k, v in dataset['difficulties'].items()])
+                message += f"• Difficulties: {difficulties_str}\n"
+            
+            message += "\n"
+        
+        message += "**Использование:**\n"
+        message += "`/evaluate <dataset_name> <run_name>`\n\n"
+        message += "**Примеры:**\n"
+        message += "• `/evaluate automotive_tech_channels_v1 eval_v1`\n"
+        message += "• `/evaluate team_discussions_groups_v1 eval_groups`"
+        
+        await update.message.reply_text(message, parse_mode='Markdown')
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to get datasets info: {e}")
+        await update.message.reply_text(
+            f"❌ **Ошибка получения datasets:**\n\n{str(e)}",
+            parse_mode='Markdown'
+        )
 

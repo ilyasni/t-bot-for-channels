@@ -14,7 +14,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Prepare key moments extraction prompt\nconst items = $input.all();\nconst data = items[0].json;\n\nconst assessment = data.assessment || {};\nconst topics = data.topics || [];\nconst emotions = data.emotions || {};\nconst speakers = data.speakers || {};\nconst messagesText = data.messages_text || \"\";\nconst messages = data.messages || [];\nconst detailLevel = assessment.detail_level || \"standard\";\n\n// === BUILD PROMPT ===\n\nconst prompt = `Извлеки ключевые моменты из диалога.\\n\\nТИП ДИАЛОГА: ${assessment.dialogue_type}\\nУРОВЕНЬ: ${detailLevel}\\n\\n=== КОНТЕКСТ ===\\n\\nТЕМЫ:\\n${topics.map(t => `- ${t.name} (приоритет: ${t.priority || 'medium'})`).join('\\n')}\\n\\nУЧАСТНИКИ:\\n${Object.keys(speakers).map(s => `- @${s}: ${speakers[s].role || 'участник'}`).join('\\n')}\\n\\nЭМОЦИОНАЛЬНЫЙ ФОН:\\n- Общий тон: ${emotions.overall_tone || emotions.tone || 'neutral'}\\n- Атмосфера: ${emotions.atmosphere || 'обычная'}\\n\\nСООБЩЕНИЯ:\\n${messagesText}\\n\\n=== ЗАДАЧА ===\\n\\nНайди и классифицируй ключевые моменты:\\n\\n1. ✅ РЕШЕНИЯ - что было решено\\n2. ❓ ВОПРОСЫ - открытые вопросы, требующие ответа\\n3. ⚠️ ПРОБЛЕМЫ - выявленные проблемы и риски\\n4. 🤝 ДОГОВОРЕННОСТИ - согласованные действия/сроки\\n5. 🔴 РИСКИ/ОПАСЕНИЯ - высказанные concerns\\n\\nДля КАЖДОГО момента укажи:\\n- type: decision | question | problem | agreement | risk\\n- content: краткое описание (1 предложение)\\n- context: почему это возникло\\n- participants: список участников ([@username])\\n- why: причина/обоснование\\n- consequences: последствия или необходимые действия\\n- urgency: low | medium | high\\n- emotional_context: эмоциональный контекст момента\\n- participant_emotions: эмоции участников {\"@user\": \"emotion\"}\\n\\nФОРМАТ:\\n{\\n  \"key_moments\": [\\n    {\\n      \"type\": \"decision\",\\n      \"content\": \"Отложить релиз до исправления\",\\n      \"context\": \"Обнаружен критический баг\",\\n      \"participants\": [\"@Оксана\", \"@Иван\"],\\n      \"why\": \"Баг блокирует production\",\\n      \"consequences\": \"Релиз переносится на неделю\",\\n      \"urgency\": \"high\",\\n      \"emotional_context\": \"Concern, but constructive approach\",\\n      \"participant_emotions\": {\"@Оксана\": \"worried_but_professional\"}\\n    }\\n  ]\\n}\\n\\nВАЖНО:\\n- Верни ТОЛЬКО валидный JSON без markdown блоков\\n- Извлекай только РЕАЛЬНО важные моменты (3-10 штук)\\n- Если нет ключевых моментов, верни пустой массив`;\n\n// Calculate max_tokens safely\nconst maxTokens = (assessment.token_budgets && assessment.token_budgets.key_moments) ? assessment.token_budgets.key_moments : 800;\n\nreturn [\n  {\n    json: {\n      prompt: prompt,\n      max_tokens: maxTokens,\n      detail_level: detailLevel,\n      message_count: messages.length\n    }\n  }\n];"
+        "jsCode": "// Prepare HTTP Request data for key moments extraction\nconst items = $input.all();\nconst data = items[0].json;\n\n// Get original messages from execution context\nconst executionData = $execution.customData.getAll();\nconst originalMessages = executionData.original_messages || data.messages || [];\nconst originalMessagesText = executionData.original_messages_text || data.messages_text || \"\";\n\nconst assessment = data.assessment || {};\nconst topics = data.topics || [];\nconst emotions = data.emotions || {};\nconst speakers = data.speakers || {};\nconst messagesText = originalMessagesText;\nconst messages = originalMessages;\nconst detailLevel = assessment.detail_level || \"standard\";\n\n// Build system message\nconst systemMessage = \"Ты - аналитик ключевых моментов в диалогах. Извлекаешь решения, вопросы, проблемы, договоренности, риски с эмоциональным контекстом. Возвращай ТОЛЬКО валидный JSON: {\\\"key_moments\\\": [...]}. ЗАПРЕЩЕНО: markdown, комментарии, придумывание данных.\";\n\n// === BUILD USER MESSAGE ===\n\nconst userMessage = `Извлеки ключевые моменты из диалога.\\n\\nТИП ДИАЛОГА: ${assessment.dialogue_type}\\nУРОВЕНЬ: ${detailLevel}\\n\\n=== КОНТЕКСТ ===\\n\\nТЕМЫ:\\n${topics.map(t => `- ${t.name} (приоритет: ${t.priority || 'medium'})`).join('\\n')}\\n\\nУЧАСТНИКИ:\\n${Object.keys(speakers).map(s => `- @${s}: ${speakers[s].role || 'участник'}`).join('\\n')}\\n\\nЭМОЦИОНАЛЬНЫЙ ФОН:\\n- Общий тон: ${emotions.overall_tone || emotions.tone || 'neutral'}\\n- Атмосфера: ${emotions.atmosphere || 'обычная'}\\n\\nСООБЩЕНИЯ:\\n${messagesText}\\n\\n=== ЗАДАЧА ===\\n\\nНайди и классифицируй ключевые моменты:\\n\\n1. ✅ РЕШЕНИЯ - что было решено\\n2. ❓ ВОПРОСЫ - открытые вопросы, требующие ответа\\n3. ⚠️ ПРОБЛЕМЫ - выявленные проблемы и риски\\n4. 🤝 ДОГОВОРЕННОСТИ - согласованные действия/сроки\\n5. 🔴 РИСКИ/ОПАСЕНИЯ - высказанные concerns\\n\\nДля КАЖДОГО момента укажи:\\n- type: decision | question | problem | agreement | risk\\n- content: краткое описание (1 предложение)\\n- context: почему это возникло\\n- participants: список участников ([@username])\\n- why: причина/обоснование\\n- consequences: последствия или необходимые действия\\n- urgency: low | medium | high\\n- emotional_context: эмоциональный контекст момента\\n- participant_emotions: эмоции участников {\"@user\": \"emotion\"}\\n\\nФОРМАТ:\\n{\\n  \"key_moments\": [\\n    {\\n      \"type\": \"decision\",\\n      \"content\": \"Отложить релиз до исправления\",\\n      \"context\": \"Обнаружен критический баг\",\\n      \"participants\": [\"@Оксана\", \"@Иван\"],\\n      \"why\": \"Баг блокирует production\",\\n      \"consequences\": \"Релиз переносится на неделю\",\\n      \"urgency\": \"high\",\\n      \"emotional_context\": \"Concern, but constructive approach\",\\n      \"participant_emotions\": {\"@Оксана\": \"worried_but_professional\"}\\n    }\\n  ]\\n}\\n\\nВАЖНО:\\n- Верни ТОЛЬКО валидный JSON без markdown блоков\\n- Извлекай только РЕАЛЬНО важные моменты (3-10 штук)\\n- Если нет ключевых моментов, верни пустой массив`;\n\n// Calculate max_tokens safely\nconst maxTokens = (assessment.token_budgets && assessment.token_budgets.key_moments) ? assessment.token_budgets.key_moments : 800;\n\nreturn [\n  {\n    json: {\n      system_message: systemMessage,\n      user_message: userMessage,\n      max_tokens: maxTokens,\n      detail_level: detailLevel,\n      message_count: messages.length\n    }\n  }\n];"
       },
       "id": "prepare-key-moments-prompt",
       "name": "Prepare Key Moments Prompt",
@@ -27,9 +27,9 @@
     },
     {
       "parameters": {
-        "method": "POST",
-        "url": "http://gpt2giga-proxy:8090/v1/chat/completions",
+        "url": "http://gpt2giga-proxy:8000/v1/chat/completions",
         "authentication": "none",
+        "requestMethod": "POST",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
@@ -40,11 +40,9 @@
           ]
         },
         "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ {\"model\": \"GigaChat\", \"messages\": [{\"role\": \"system\", \"content\": \"Ты - аналитик ключевых моментов в диалогах. Извлекаешь решения, вопросы, проблемы, договоренности, риски с эмоциональным контекстом. Всегда возвращай валидный JSON.\"}, {\"role\": \"user\", \"content\": $json.prompt}], \"temperature\": 0.3, \"max_tokens\": $json.max_tokens} }}",
-        "options": {
-          "timeout": 90000
-        }
+        "bodyContentType": "json",
+        "jsonBody": "={{ {\"model\": \"GigaChat-Pro\", \"messages\": [{\"role\": \"system\", \"content\": $json.system_message}, {\"role\": \"user\", \"content\": $json.user_message}], \"temperature\": 0.1, \"max_tokens\": $json.max_tokens, \"response_format\": {\"type\": \"json_object\"}} }}",
+        "options": {}
       },
       "id": "gigachat-key-moments",
       "name": "GigaChat: Extract Key Moments",
@@ -57,12 +55,34 @@
     },
     {
       "parameters": {
-        "jsCode": "// Parse GigaChat key moments response\nconst items = $input.all();\nconst response = items[0].json.choices?.[0]?.message?.content || '{}';\n\nlet keyMoments = [];\n\ntry {\n  // Remove markdown code blocks if present\n  let cleanContent = response.trim();\n  if (cleanContent.startsWith('```')) {\n    const lines = cleanContent.split('\\n');\n    cleanContent = lines.slice(1, -1).join('\\n').trim();\n    if (cleanContent.startsWith('json')) {\n      cleanContent = cleanContent.slice(4).trim();\n    }\n  }\n  \n  // Parse JSON\n  const parsed = JSON.parse(cleanContent);\n  keyMoments = parsed.key_moments || [];\n  \n  console.log(`✅ Key moments extracted: ${keyMoments.length} моментов`);\n  if (keyMoments.length > 0) {\n    const types = keyMoments.map(km => km.type).join(', ');\n    console.log(`   Types: ${types}`);\n  }\n  \n} catch (e) {\n  console.error('❌ Key moments parse error:', e.message);\n  console.error('Response:', response.substring(0, 300));\n  \n  // Fallback: try to extract JSON from text\n  const jsonMatch = response.match(/\\{[\\s\\S]*?\\}/);\n  if (jsonMatch) {\n    try {\n      const parsed = JSON.parse(jsonMatch[0]);\n      keyMoments = parsed.key_moments || [];\n    } catch (e2) {\n      console.error('Fallback parse failed:', e2.message);\n      keyMoments = [];\n    }\n  }\n}\n\n// Fallback if empty - not an error, just no key moments found\nif (!keyMoments || keyMoments.length === 0) {\n  console.log('ℹ️ No key moments found in dialogue (это нормально для casual диалогов)');\n  keyMoments = [];\n}\n\n// Return key moments\nreturn [\n  {\n    json: {\n      key_moments: keyMoments\n    }\n  }\n];"
+        "jsCode": "// Parse GigaChat response from gpt2giga proxy\nconst response = $input.first().json.choices?.[0]?.message?.content || '{}';\n\nconsole.log('📥 GigaChat response received:', response.substring(0, 100));\n\nreturn [\n  {\n    json: {\n      raw_content: response\n    }\n  }\n];"
       },
-      "id": "parse-key-moments",
-      "name": "Parse Key Moments",
+      "id": "parse-key-moments-response",
+      "name": "Parse Response",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "workflowId": "utility_json_guardrail",
+        "source": "database",
+        "inputData": {
+          "values": [
+            {
+              "json": {
+                "raw_content": "={{ $json.response || choices[0].message.content }}",
+                "data_type": "key_moments",
+                "original_messages": "={{ $execution.customData.getAll().original_messages }}"
+              }
+            }
+          ]
+        }
+      },
+      "id": "execute-guardrail",
+      "name": "Execute Guardrail",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
       "position": [
         850,
         300
@@ -96,7 +116,18 @@
       "main": [
         [
           {
-            "node": "Parse Key Moments",
+            "node": "Parse Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Response": {
+      "main": [
+        [
+          {
+            "node": "Execute Guardrail",
             "type": "main",
             "index": 0
           }

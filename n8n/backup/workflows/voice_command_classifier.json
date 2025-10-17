@@ -1,0 +1,182 @@
+{
+  "name": "Voice Command Classifier",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "voice-classify",
+        "responseMode": "lastNode",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        }
+      },
+      "id": "1a2b3c4d-5e6f-7g8h-9i0j-1k2l3m4n5o6p",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [250, 300],
+      "webhookId": "voice-classify-webhook"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "transcription",
+              "name": "transcription",
+              "value": "={{ $json.body.transcription }}",
+              "type": "string"
+            },
+            {
+              "id": "user_id",
+              "name": "user_id",
+              "value": "={{ $json.body.user_id }}",
+              "type": "number"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "2b3c4d5e-6f7g-8h9i-0j1k-2l3m4n5o6p7q",
+      "name": "Extract Input",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.3,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const transcription = $input.first().json.transcription;\nconst userId = $input.first().json.user_id;\n\nconst prompt = `Ты — классификатор голосовых команд для Telegram бота.\n\nДоступные команды:\n1. /ask — поиск ответа в сохраненных постах пользователя (RAG)\n   - Вопросы: \"Что писали про...\", \"Расскажи о...\", \"Какие новости...\"\n   - Требует анализа и генерации ответа\n\n2. /search — гибридный поиск (посты + интернет)\n   - Запросы: \"Найди информацию о...\", \"Что такое...\", \"Где найти...\"\n   - Информационный поиск с источниками\n\nТранскрипция голосового сообщения:\n\"${transcription}\"\n\nЗадача:\nОпредели наиболее подходящую команду для этого запроса.\n\nВерни ТОЛЬКО JSON:\n{\n  \"command\": \"ask\" или \"search\",\n  \"confidence\": 0.0-1.0,\n  \"reasoning\": \"краткое объяснение выбора\"\n}`;\n\nconst requestBody = {\n  model: \"GigaChat\",\n  messages: [\n    {\n      role: \"system\",\n      content: \"Ты — эксперт по классификации пользовательских запросов. Отвечай строго в формате JSON.\"\n    },\n    {\n      role: \"user\",\n      content: prompt\n    }\n  ],\n  temperature: 0.1,\n  max_tokens: 150\n};\n\nreturn {\n  transcription,\n  user_id: userId,\n  requestBody\n};"
+      },
+      "id": "3c4d5e6f-7g8h-9i0j-1k2l-3m4n5o6p7q8r",
+      "name": "Prepare Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://gpt2giga-proxy:8090/v1/chat/completions",
+        "authentication": "none",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.requestBody }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "4d5e6f7g-8h9i-0j1k-2l3m-4n5o6p7q8r9s",
+      "name": "GigaChat Classify",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Парсим ответ GigaChat\nconst item = $input.first().json;\nconst gigachatResponse = item.choices?.[0]?.message?.content || '{}';\n\n// Получаем данные из Prepare Request\nconst preparedData = $('Prepare Request').first().json;\nconst transcription = preparedData.transcription;\nconst userId = preparedData.user_id;\n\n// Очищаем от markdown backticks если есть\nlet cleaned = gigachatResponse.trim();\nif (cleaned.startsWith('```json')) {\n  cleaned = cleaned.replace(/^```json\\s*/, '').replace(/```\\s*$/, '');\n} else if (cleaned.startsWith('```')) {\n  cleaned = cleaned.replace(/^```\\s*/, '').replace(/```\\s*$/, '');\n}\n\ntry {\n  const result = JSON.parse(cleaned);\n  \n  // Валидация\n  const validCommands = ['ask', 'search'];\n  const command = validCommands.includes(result.command) ? result.command : 'ask';\n  const confidence = Math.min(Math.max(result.confidence || 0.5, 0), 1);\n  \n  return {\n    command: command,\n    confidence: confidence,\n    reasoning: result.reasoning || 'No reasoning provided',\n    original_transcription: transcription,\n    user_id: userId\n  };\n} catch (e) {\n  // Fallback: если парсинг не удался\n  const transcriptionLower = transcription.toLowerCase();\n  \n  // Простая эвристика\n  const searchKeywords = ['найди', 'найти', 'поиск', 'что такое', 'где найти', 'покажи'];\n  const isSearch = searchKeywords.some(kw => transcriptionLower.includes(kw));\n  \n  return {\n    command: isSearch ? 'search' : 'ask',\n    confidence: 0.6,\n    reasoning: 'Fallback: GigaChat parsing failed, used heuristics',\n    original_transcription: transcription,\n    user_id: userId\n  };\n}"
+      },
+      "id": "5e6f7g8h-9i0j-1k2l-3m4n-5o6p7q8r9s0t",
+      "name": "Parse & Validate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      },
+      "id": "6f7g8h9i-0j1k-2l3m-4n5o-6p7q8r9s0t1u",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1250, 300]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Extract Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Input": {
+      "main": [
+        [
+          {
+            "node": "Prepare Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Request": {
+      "main": [
+        [
+          {
+            "node": "GigaChat Classify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GigaChat Classify": {
+      "main": [
+        [
+          {
+            "node": "Parse & Validate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse & Validate": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "id": "voice-ai",
+      "name": "Voice AI"
+    }
+  ],
+  "meta": {
+    "instanceId": "voice-classifier-v1"
+  },
+  "id": "voice-command-classifier-v1",
+  "versionId": "1",
+  "triggerCount": 1,
+  "active": false
+}
+

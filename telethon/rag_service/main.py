@@ -27,6 +27,15 @@ from schemas import (
     CollectionStatsResponse,
     HealthResponse
 )
+
+# Evaluation imports
+from evaluation.schemas import (
+    EvaluationBatchRequest,
+    EvaluationBatchResponse,
+    EvaluationStatusResponse,
+    EvaluationResultsResponse
+)
+from evaluation.evaluation_runner import EvaluationRunner
 from indexer import indexer_service
 from vector_db import qdrant_client
 from embeddings import embeddings_service
@@ -1333,6 +1342,127 @@ async def hybrid_search(request: HybridSearchRequest):
     except Exception as e:
         logger.error(f"❌ Ошибка гибридного поиска: {e}")
         raise HTTPException(500, f"Ошибка поиска: {str(e)}")
+
+
+# ============================================================================
+# Evaluation Endpoints
+# ============================================================================
+
+@app.post("/evaluation/batch", response_model=EvaluationBatchResponse)
+async def run_evaluation_batch(request: EvaluationBatchRequest):
+    """
+    Запустить batch evaluation на golden dataset
+    
+    Args:
+        request: Параметры evaluation
+        
+    Returns:
+        EvaluationBatchResponse с ID запуска
+    """
+    try:
+        logger.info(f"🚀 Starting evaluation batch: {request.dataset_name}")
+        
+        # Запустить evaluation в background
+        async def run_evaluation():
+            async with EvaluationRunner() as runner:
+                await runner.run_evaluation(
+                    dataset_name=request.dataset_name,
+                    run_name=request.run_name,
+                    model_provider=request.model_provider,
+                    model_name=request.model_name,
+                    parallel_workers=request.parallel_workers,
+                    timeout_seconds=request.timeout_seconds
+                )
+        
+        # Создать task для background execution
+        import asyncio
+        task = asyncio.create_task(run_evaluation())
+        
+        # TODO: Сохранить task ID для tracking
+        
+        return EvaluationBatchResponse(
+            run_id=request.run_name,  # Используем run_name как ID
+            status="started",
+            message=f"Evaluation batch started for dataset '{request.dataset_name}'",
+            estimated_duration=300  # 5 minutes estimate
+        )
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to start evaluation batch: {e}")
+        raise HTTPException(500, f"Failed to start evaluation: {str(e)}")
+
+
+@app.get("/evaluation/status/{run_id}", response_model=EvaluationStatusResponse)
+async def get_evaluation_status(run_id: str):
+    """
+    Получить статус evaluation run
+    
+    Args:
+        run_id: ID evaluation run
+        
+    Returns:
+        EvaluationStatusResponse с текущим статусом
+    """
+    try:
+        # TODO: Реализовать получение статуса из БД
+        # Пока возвращаем mock данные
+        
+        return EvaluationStatusResponse(
+            run_id=run_id,
+            status="running",
+            progress=0.5,
+            total_items=10,
+            processed_items=5,
+            avg_score=None,
+            started_at=datetime.now(timezone.utc),
+            completed_at=None
+        )
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to get evaluation status: {e}")
+        raise HTTPException(500, f"Failed to get status: {str(e)}")
+
+
+@app.get("/evaluation/results/{run_id}", response_model=EvaluationResultsResponse)
+async def get_evaluation_results(run_id: str):
+    """
+    Получить результаты evaluation run
+    
+    Args:
+        run_id: ID evaluation run
+        
+    Returns:
+        EvaluationResultsResponse с результатами
+    """
+    try:
+        # TODO: Реализовать получение результатов из БД
+        # Пока возвращаем mock данные
+        
+        return EvaluationResultsResponse(
+            run_id=run_id,
+            dataset_name="automotive_tech_channels_v1",
+            model_provider="openrouter",
+            model_name="gpt-4o-mini",
+            total_items=10,
+            successful_items=8,
+            failed_items=2,
+            avg_scores={
+                "answer_correctness": 0.85,
+                "faithfulness": 0.78,
+                "context_relevance": 0.82,
+                "channel_context_awareness": 0.88,
+                "overall_score": 0.83
+            },
+            overall_score=0.83,
+            results=[],  # TODO: Add actual results
+            started_at=datetime.now(timezone.utc),
+            completed_at=datetime.now(timezone.utc),
+            duration_seconds=180.5
+        )
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to get evaluation results: {e}")
+        raise HTTPException(500, f"Failed to get results: {str(e)}")
 
 
 if __name__ == "__main__":

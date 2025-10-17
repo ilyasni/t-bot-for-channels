@@ -1,7 +1,7 @@
 ---
 title: "Telegram Channel Parser Bot - Main Rules"
 description: "Entry point for Telegram Bot Cursor Rules system"
-version: "3.4.0"
+version: "3.5.0"
 priority: critical
 ruleType: "always"
 autoAttach: true
@@ -33,12 +33,19 @@ The rules are organized into **10 modular files** in `.cursor/rules/telegram-bot
 8. **08-api.mdc** - FastAPI endpoints
 9. **09-external.mdc** - External services integration
 10. **10-groups.mdc** - Groups дайджесты, упоминания, n8n workflows
+11. **11-maintenance.mdc** - Unified retention service, cleanup policies
+12. **12-evaluation.mdc** - LLM evaluation system, quality assessment
 
-## 🆕 Recent Updates (v3.4.0)
+## 🆕 Recent Updates (v3.5.0)
 
+- **LLM Evaluation System** - Comprehensive quality assessment for bot responses using Ragas
+- **Golden Dataset Management** - Structured datasets for evaluating bot performance
+- **Evaluation Metrics & Monitoring** - Prometheus metrics and Grafana dashboards for evaluation insights
+- **Admin Commands & CLI** - Telegram admin commands and CLI tools for evaluation management
+- **Langfuse Integration** - Evaluation results tracking and observability
 - **Unified Retention Service** - Centralized cleanup with smart retention logic
 - **Context7 Integration** - Mandatory documentation lookup before coding
-- **Enhanced Testing** - Comprehensive unit tests for all services
+- **Enhanced Testing** - Comprehensive unit tests for all services including evaluation
 - **Project Organization** - Cleaned up documentation structure
 
 ## 🔴 Critical Rules (Always Apply)
@@ -163,7 +170,9 @@ response = requests.get(url)  # NO!
 - QR Login → `05-security.mdc`
 - Admin Panel → `06-admin.mdc`
 - RAG/AI → `07-rag.mdc`
+- LLM Evaluation → `12-evaluation.mdc`
 - Testing → `04-development.mdc`
+- Maintenance/Cleanup → `11-maintenance.mdc`
 
 ## ✅ Verification Checklist Summary
 
@@ -272,5 +281,5 @@ When rules from multiple modules conflict:
 
 **See full documentation:** `.cursor/rules/telegram-bot/README.md`  
 **Changelog:** `.cursor/rules/telegram-bot/CHANGELOG.mdc`  
-**Version:** 3.4.0
+**Version:** 3.5.0
 

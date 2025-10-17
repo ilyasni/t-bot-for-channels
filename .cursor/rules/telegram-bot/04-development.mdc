@@ -193,7 +193,11 @@ tests/
 ├── test_retention_system.py    # Cleanup service
 ├── test_qr_auth.py             # QR Login
 ├── test_admin_panel.py         # Admin API
-└── test_rag_pipeline.py        # RAG integration
+├── test_rag_pipeline.py        # RAG integration
+├── test_evaluation_schemas.py  # Evaluation data models
+├── test_golden_dataset_manager.py  # Dataset management
+├── test_bot_evaluator.py       # LLM evaluation logic
+└── test_evaluation_runner.py   # Batch evaluation orchestration
 ```
 
 ### Запуск тестов
@@ -210,6 +214,12 @@ pytest tests/ --cov=. --cov-report=html
 
 # Только быстрые
 pytest -m "not slow" tests/
+
+# Evaluation тесты
+pytest tests/test_evaluation_*.py -v
+
+# С coverage для evaluation
+pytest tests/test_evaluation_*.py --cov=evaluation --cov-report=html
 ```
 
 ### Пример теста
@@ -260,6 +270,117 @@ async def test_qr_session_expiry():
     # Verify
     session = await qr_auth_manager.get_qr_session(session_id)
     assert session is None  # Expired
+```
+
+### Пример теста для Evaluation системы
+
+```python
+# tests/test_evaluation_schemas.py
+import pytest
+from datetime import datetime, timezone
+from evaluation.schemas import GoldenDatasetItem, TelegramContext, ContextType, DifficultyLevel, ToneType
+
+def test_golden_dataset_item_creation():
+    """Тест создания GoldenDatasetItem"""
+    # Arrange
+    telegram_context = TelegramContext(
+        user_id=12345,
+        channels=["automotive_news"],
+        context_type=ContextType.SINGLE_CHANNEL
+    )
+    
+    # Act
+    item = GoldenDatasetItem(
+        item_id="test_001",
+        dataset_name="test_dataset",
+        category="automotive",
+        input={"message_text": "Test query"},
+        query="Test query",
+        telegram_context=telegram_context,
+        expected_output="Expected response",
+        difficulty=DifficultyLevel.BEGINNER,
+        tone=ToneType.TECHNICAL,
+        requires_multi_source=False
+    )
+    
+    # Assert
+    assert item.item_id == "test_001"
+    assert item.telegram_context.user_id == 12345
+    assert item.difficulty == DifficultyLevel.BEGINNER
+    assert item.tone == ToneType.TECHNICAL
+    assert item.created_at.tzinfo is not None  # timezone-aware
+
+@pytest.mark.asyncio
+async def test_golden_dataset_manager_crud():
+    """Тест CRUD операций для GoldenDatasetManager"""
+    from evaluation.golden_dataset_manager import GoldenDatasetManager
+    from unittest.mock import AsyncMock
+    
+    # Mock asyncpg pool
+    mock_pool = AsyncMock()
+    mock_conn = AsyncMock()
+    mock_pool.acquire.return_value.__aenter__.return_value = mock_conn
+    
+    manager = GoldenDatasetManager(mock_pool)
+    
+    # Test add_item
+    item = GoldenDatasetItem(
+        item_id="test_001",
+        dataset_name="test_dataset",
+        category="automotive",
+        input={"message_text": "Test"},
+        query="Test query",
+        telegram_context=TelegramContext(
+            user_id=12345,
+            channels=["test_channel"],
+            context_type=ContextType.SINGLE_CHANNEL
+        ),
+        expected_output="Test response"
+    )
+    
+    await manager.add_item(item)
+    
+    # Verify database call
+    mock_conn.execute.assert_called_once()
+    
+    # Test get_dataset_stats
+    mock_conn.fetchrow.return_value = {"total": 10, "categories": {"automotive": 5}}
+    stats = await manager.get_dataset_stats("test_dataset")
+    
+    assert stats["total"] == 10
+    assert stats["categories"]["automotive"] == 5
+
+@pytest.mark.asyncio
+async def test_bot_evaluator_metrics():
+    """Тест BotEvaluator с мокированием Ragas"""
+    from evaluation.bot_evaluator import BotEvaluator
+    from unittest.mock import AsyncMock, patch
+    
+    # Mock LLM
+    mock_llm = AsyncMock()
+    
+    # Mock Ragas metrics
+    with patch('evaluation.bot_evaluator.RAGAS_AVAILABLE', True):
+        with patch('evaluation.bot_evaluator.AnswerCorrectness') as mock_metric:
+            evaluator = BotEvaluator(
+                model_provider="openrouter",
+                model_name="gpt-4o-mini",
+                evaluator_llm=mock_llm
+            )
+            
+            # Test evaluation
+            mock_metric.return_value.ascore.return_value = 0.85
+            
+            result = await evaluator.evaluate_item(
+                item_id="test_001",
+                query="Test query",
+                context=["Test context"],
+                response="Test response",
+                reference_answer="Reference answer"
+            )
+            
+            assert result["overall_score"] == 0.85
+            assert "answer_correctness" in result["scores"]
 ```
 
 ## 📝 Linting & Formatting

@@ -84,6 +84,11 @@ services:
       - GPT2GIGA_PASS_MODEL=true
       # Модель для embeddings
       - GPT2GIGA_EMBEDDINGS=EmbeddingsGigaR
+      # SSL настройки для GigaChat API (с сертификатами Минцифры)
+      - GIGACHAT_VERIFY_SSL_CERTS=true
+      - GIGACHAT_BASE_URL=https://gigachat.devices.sberbank.ru/api/v1
+      # Дополнительные SSL настройки для gpt2giga
+      - GPT2GIGA_VERIFY_SSL_CERTS=true
     restart: unless-stopped
     networks:
       - localai_default

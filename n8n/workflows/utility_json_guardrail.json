@@ -1,0 +1,51 @@
+{
+  "name": "Utility: JSON Guardrail",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "execute-workflow-trigger",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        250,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse & Validate JSON - Context7 best practices for n8n 1.115.2\nconst items = $input.all();\nconst rawContent = items[0].json.raw_content || '';\nconst dataType = items[0].json.data_type || '';\nconst originalMessages = items[0].json.original_messages || [];\n\n// Safe JSON parser for gpt2giga proxy (clean JSON, no escaped quotes)\nfunction safeParseJSON(str) {\n  let clean = str.trim();\n  \n  // Remove markdown code fences\n  if (clean.startsWith('```')) {\n    const lines = clean.split('\\n');\n    clean = lines.slice(1, -1).join('\\n').trim();\n    if (clean.startsWith('json')) {\n      clean = clean.slice(4).trim();\n    }\n  }\n  \n  // Extract balanced JSON object\n  const match = clean.match(/\\{[\\s\\S]*\\}/);\n  const jsonStr = match ? match[0] : clean;\n  \n  console.log('Parsing JSON from gpt2giga proxy:', jsonStr.substring(0, 100));\n  \n  return JSON.parse(jsonStr);\n}\n\n// Validation schemas for different data types\nconst validators = {\n  topics: (data) => {\n    if (!Array.isArray(data.topics)) {\n      return {valid: false, error: 'topics must be array'};\n    }\n    \n    for (const t of data.topics) {\n      if (typeof t.name !== 'string') t.name = String(t.name || '');\n      if (!['high','medium','low'].includes(t.priority)) t.priority = 'medium';\n    }\n    \n    return {valid: true, data: data.topics};\n  },\n  \n  emotions: (data) => {\n    const emotions = data.emotions || data;\n    if (!emotions.overall_tone) emotions.overall_tone = 'neutral';\n    if (!emotions.atmosphere) emotions.atmosphere = 'обычная';\n    if (!emotions.indicators) emotions.indicators = {};\n    \n    return {valid: true, data: emotions};\n  },\n  \n  speakers: (data) => {\n    // Whitelist filtering for speakers\n    const speakers = data.speakers || {};\n    const allowedUsernames = new Set(\n      originalMessages.map(m => String(m.username || '').replace(/^@+/, ''))\n    );\n    \n    const filtered = {};\n    for (const [key, value] of Object.entries(speakers)) {\n      const normalized = String(key).replace(/^@+/, '');\n      if (allowedUsernames.has(normalized)) {\n        filtered[normalized] = value;\n      }\n    }\n    \n    return {valid: Object.keys(filtered).length > 0, data: filtered};\n  },\n  \n  key_moments: (data) => {\n    const moments = Array.isArray(data.key_moments) ? data.key_moments : [];\n    return {valid: true, data: moments};\n  },\n  \n  timeline: (data) => {\n    const timeline = Array.isArray(data.timeline) ? data.timeline : [];\n    return {valid: true, data: timeline};\n  },\n  \n  summary: (data) => {\n    const summary = data.summary || '';\n    return {valid: typeof summary === 'string', data: summary};\n  },\n  \n  context_links: (data) => {\n    const links = data.context_links || data.links || [];\n    if (!Array.isArray(links)) {\n      return {valid: false, error: 'context_links must be array'};\n    }\n    \n    // Validate link structure\n    const validatedLinks = links.map(link => {\n      if (typeof link === 'string') {\n        return {url: link, title: '', description: ''};\n      }\n      return {\n        url: link.url || '',\n        title: link.title || '',\n        description: link.description || ''\n      };\n    });\n    \n    return {valid: true, data: validatedLinks};\n  },\n  \n  assessment: (data) => {\n    const assessment = data.assessment || data;\n    \n    // Ensure required fields\n    if (!assessment.detail_level) assessment.detail_level = 'standard';\n    if (!assessment.dialogue_type) assessment.dialogue_type = 'casual_chat';\n    if (!assessment.message_count) assessment.message_count = 0;\n    if (!assessment.token_budgets) assessment.token_budgets = {};\n    if (!assessment.has_links) assessment.has_links = false;\n    if (!assessment.has_topics) assessment.has_topics = false;\n    \n    // Validate detail_level\n    const validLevels = ['micro', 'minimal', 'standard', 'detailed', 'comprehensive'];\n    if (!validLevels.includes(assessment.detail_level)) {\n      assessment.detail_level = 'standard';\n    }\n    \n    // Validate dialogue_type\n    const validTypes = ['casual_chat', 'technical_discussion', 'problem_solving', 'conflict', 'collaboration'];\n    if (!validTypes.includes(assessment.dialogue_type)) {\n      assessment.dialogue_type = 'casual_chat';\n    }\n    \n    return {valid: true, data: assessment};\n  }\n};\n\nlet result = {validated_data: null, is_valid: false, errors: []};\n\ntry {\n  const parsed = safeParseJSON(rawContent);\n  const validator = validators[dataType];\n  \n  if (!validator) {\n    result.errors.push(`Unknown data_type: ${dataType}`);\n  } else {\n    const validation = validator(parsed);\n    result.validated_data = validation.data;\n    result.is_valid = validation.valid;\n    if (validation.error) result.errors.push(validation.error);\n  }\n  \n  console.log(`✅ Guardrail [${dataType}]:`, {\n    valid: result.is_valid,\n    keys: typeof result.validated_data === 'object' ? Object.keys(result.validated_data) : null\n  });\n  \n} catch (e) {\n  console.error(`❌ Guardrail parse error [${dataType}]:`, e.message);\n  result.errors.push(e.message);\n}\n\n// Return format according to Context7 best practices\nreturn [{json: result}];"
+      },
+      "id": "parse-validate-json",
+      "name": "Parse & Validate JSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        450,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Parse & Validate JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "updatedAt": "2025-10-15T12:00:00.000Z",
+  "versionId": "1"
+}

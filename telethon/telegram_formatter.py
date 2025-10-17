@@ -356,6 +356,45 @@ def format_rag_answer(answer: str, sources: Optional[List[Dict[str, Any]]] = Non
     return html
 
 
+def format_search_results(query: str, posts: List[Dict[str, Any]], web_results: List[Dict[str, Any]]) -> str:
+    """
+    Форматирует результаты гибридного поиска для Telegram
+    
+    Args:
+        query: Поисковый запрос
+        posts: Список найденных постов
+        web_results: Список результатов веб-поиска
+        
+    Returns:
+        HTML форматированный текст для Telegram
+    """
+    response_text = f"🔍 <b>Результаты поиска:</b> \"{query}\"\n\n"
+    
+    # Посты пользователя
+    if posts:
+        response_text += f"📱 <b>Ваши посты ({len(posts)}):</b>\n"
+        for i, post in enumerate(posts[:5], 1):
+            channel = post.get("channel", "Unknown")
+            score = int(post.get("score", 0) * 100)
+            snippet = post.get("snippet", post.get("text", ""))[:80]
+            url = post.get("url", "#")
+            response_text += f"{i}. <a href=\"{url}\">@{channel}</a> ({score}%)\n   <i>{escape(snippet)}...</i>\n\n"
+    else:
+        response_text += "📱 <b>Ваши посты:</b> Не найдено\n\n"
+    
+    # Интернет результаты
+    if web_results:
+        response_text += f"🌐 <b>Интернет ({len(web_results)}):</b>\n"
+        for i, web in enumerate(web_results[:3], 1):
+            title = web.get("title", "Без названия")[:70]
+            url = web.get("url", "#")
+            response_text += f"{i}. <a href=\"{url}\">{escape(title)}</a>\n\n"
+    else:
+        response_text += "🌐 <b>Интернет:</b> Не найдено"
+    
+    return response_text
+
+
 def format_long_digest(digest_text: str, max_visible: int = 500) -> str:
     """
     Форматирует длинный дайджест с expandable blockquote
