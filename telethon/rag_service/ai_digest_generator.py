@@ -68,26 +68,40 @@ class AIDigestGenerator:
             
             logger.info(f"📋 Выбранные темы ({len(topics)}): {', '.join(topics[:topics_limit])}")
             
-            # 2. Для каждой темы: поиск постов и суммаризация
+            # 2. Для каждой темы: Sequential обработка с rate limiting
+            # Rate limiter и retry уже встроены в embeddings.generate_embedding()
             topic_summaries = []
-            for topic in topics[:topics_limit]:
-                logger.info(f"🔍 Обработка темы: {topic}")
+            import asyncio
+            
+            for i, topic in enumerate(topics[:topics_limit]):
+                logger.info(f"🔍 Обработка темы {i+1}/{topics_limit}: {topic}")
                 
-                # Поиск релевантных постов через RAG
-                posts = await self._search_posts_for_topic(
-                    user_id, topic, date_from, date_to
-                )
-                
-                if posts:
-                    # Суммаризация через GigaChat
-                    summary = await self._summarize_topic(
-                        topic, posts, summary_style
+                try:
+                    # Rate limiter уже внутри _search_posts_for_topic
+                    # через embeddings.generate_embedding()
+                    posts = await self._search_posts_for_topic(
+                        user_id, topic, date_from, date_to
                     )
-                    topic_summaries.append(summary)
-                    logger.info(f"✅ Тема '{topic}': {summary['post_count']} постов")
+                    
+                    if posts:
+                        # Суммаризация через GigaChat
+                        summary = await self._summarize_topic(
+                            topic, posts, summary_style
+                        )
+                        topic_summaries.append(summary)
+                        logger.info(f"✅ Тема '{topic}': {len(posts)} постов")
+                    
+                except Exception as e:
+                    logger.warning(f"⚠️ Тема '{topic}' пропущена: {e}")
+                    continue
+                
+                # Небольшая пауза между темами (на всякий случай)
+                if i < len(topics) - 1:
+                    await asyncio.sleep(0.3)
             
             if not topic_summaries:
-                return self._generate_empty_digest(date_from, date_to)
+                logger.warning(f"⚠️ AI-дайджест пустой для user {user_id}, генерируем fallback")
+                return await self._generate_fallback_digest(user_id, date_from, date_to)
             
             # 3. Форматирование финального дайджеста
             digest = self._format_ai_digest(topic_summaries, date_from, date_to)
@@ -107,14 +121,19 @@ class AIDigestGenerator:
     ) -> List[str]:
         """
         Определить темы интересов пользователя
-        Комбинация: вручную указанные темы + темы из истории запросов
+        
+        Hybrid подход:
+        1. Вручную указанные темы (highest priority)
+        2. Темы из истории RAG-запросов
+        3. NEW: Топ теги из Neo4j графа (реальное поведение пользователя)
+        4. NEW: Trending tags (что популярно сейчас)
         
         Returns:
             Список тем с приоритетом preferred_topics
         """
         topics = []
         
-        # 1. Вручную указанные темы (высокий приоритет)
+        # 1. Вручную указанные темы (highest priority)
         if preferred_topics:
             topics.extend(preferred_topics)
             logger.info(f"📌 Вручную указанные темы: {preferred_topics}")
@@ -129,7 +148,70 @@ class AIDigestGenerator:
                 if topic.lower() not in [t.lower() for t in topics]:
                     topics.append(topic)
         
+        # 3. NEW: Топ теги из Neo4j графа (посты пользователя)
+        try:
+            from graph.neo4j_client import neo4j_client
+            
+            if neo4j_client.enabled:
+                # Получить telegram_id для Neo4j
+                # TODO: нужен маппинг user_id -> telegram_id
+                # Временно используем user_id напрямую
+                telegram_id = await self._get_telegram_id(user_id)
+                
+                graph_interests = await neo4j_client.get_user_interests(
+                    telegram_id=telegram_id,
+                    limit=15
+                )
+                
+                if graph_interests:
+                    graph_tags = [interest.get("tag") for interest in graph_interests if interest.get("tag")]
+                    logger.info(f"📊 Теги из графа: {graph_tags[:5]}")
+                    
+                    for tag in graph_tags:
+                        if tag and tag.lower() not in [t.lower() for t in topics]:
+                            topics.append(tag)
+        except Exception as e:
+            logger.warning(f"⚠️ Graph interests unavailable: {e}")
+        
+        # 4. NEW: Trending tags (что популярно сейчас)
+        try:
+            from graph.neo4j_client import neo4j_client
+            
+            if neo4j_client.enabled:
+                trending = await neo4j_client.get_trending_tags(days=3, limit=10)
+                
+                if trending:
+                    trending_names = [t.get("name") for t in trending if t.get("name")]
+                    logger.info(f"🔥 Trending tags: {trending_names[:5]}")
+                    
+                    for tag in trending_names:
+                        if tag and tag.lower() not in [t.lower() for t in topics]:
+                            topics.append(tag)
+        except Exception as e:
+            logger.warning(f"⚠️ Trending tags unavailable: {e}")
+        
         return topics
+    
+    async def _get_telegram_id(self, user_id: int) -> int:
+        """
+        Получить telegram_id из user_id (DB lookup)
+        
+        Returns:
+            telegram_id или user_id как fallback
+        """
+        db = SessionLocal()
+        try:
+            from models import User
+            user = db.query(User).filter(User.id == user_id).first()
+            if user and hasattr(user, 'telegram_id'):
+                return user.telegram_id
+            # Fallback: использовать user_id напрямую
+            return user_id
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to get telegram_id: {e}")
+            return user_id
+        finally:
+            db.close()
     
     async def _get_topics_from_history(self, user_id: int) -> List[str]:
         """
@@ -479,6 +561,71 @@ class AIDigestGenerator:
         lines.append(f"<i>Дайджест сгенерирован AI (GigaChat) • {datetime.now().strftime('%d.%m.%Y %H:%M')}</i>")
         
         return "\n".join(lines)
+    
+    async def _generate_fallback_digest(self, user_id: int, date_from: datetime, date_to: datetime) -> str:
+        """
+        Fallback: генерация обычного дайджеста вместо AI-дайджеста
+        Используется когда AI-дайджест пустой из-за Rate Limit или других ошибок
+        """
+        from database import SessionLocal
+        from models import Post
+        from collections import defaultdict
+        
+        logger.info(f"📰 Fallback: обычный дайджест для user {user_id}")
+        
+        db = SessionLocal()
+        try:
+            # Получаем посты за период (топ-20 по views)
+            posts = db.query(Post).filter(
+                Post.user_id == user_id,
+                Post.posted_at >= date_from,
+                Post.posted_at <= date_to
+            ).order_by(Post.views.desc().nullslast(), Post.posted_at.desc()).limit(20).all()
+            
+            if not posts:
+                return self._generate_empty_digest(date_from, date_to)
+            
+            # Группируем по каналам
+            posts_by_channel = defaultdict(list)
+            for post in posts:
+                channel_username = post.channel.channel_username if post.channel else "Unknown"
+                posts_by_channel[channel_username].append(post)
+            
+            # Генерируем HTML
+            from html import escape
+            lines = []
+            lines.append("<b>📰 Дайджест постов</b>")
+            lines.append(f"<i>Период: {date_from.strftime('%d.%m.%Y')} - {date_to.strftime('%d.%m.%Y')}</i>")
+            lines.append(f"<i>⚠️ AI-дайджест недоступен, показаны топ-посты по просмотрам</i>")
+            lines.append("")
+            
+            for channel_username, channel_posts in sorted(posts_by_channel.items()):
+                lines.append(f"<b>📢 @{escape(channel_username)}</b>")
+                lines.append(f"<i>Постов: {len(channel_posts)}</i>")
+                lines.append("")
+                
+                for post in channel_posts:
+                    # Дата и просмотры
+                    date_str = post.posted_at.strftime('%d.%m %H:%M')
+                    views_str = f" | 👁 {post.views}" if post.views else ""
+                    lines.append(f"<b>{date_str}{views_str}</b>")
+                    
+                    # Текст
+                    if len(post.text) > 200:
+                        lines.append(escape(post.text[:200]) + "...")
+                    else:
+                        lines.append(escape(post.text))
+                    
+                    # Ссылка
+                    if post.url:
+                        lines.append(f'<a href="{post.url}">Читать полностью →</a>')
+                    
+                    lines.append("")
+            
+            return "\n".join(lines)
+            
+        finally:
+            db.close()
     
     def _generate_empty_digest(self, date_from: datetime, date_to: datetime) -> str:
         """Сгенерировать пустой дайджест в HTML формате"""

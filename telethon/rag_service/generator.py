@@ -10,7 +10,19 @@ from datetime import datetime
 from search import search_service
 import config
 
+# Инициализируем logger до использования
 logger = logging.getLogger(__name__)
+
+# Feature flags для A/B testing
+try:
+    from rag_service.feature_flags import feature_flags
+    from rag_service.enhanced_search import enhanced_search_service
+    ENHANCED_SEARCH_AVAILABLE = True
+except ImportError:
+    logger.warning("⚠️ Enhanced search not available, using baseline only")
+    ENHANCED_SEARCH_AVAILABLE = False
+    feature_flags = None
+    enhanced_search_service = None
 
 
 class RAGGenerator:
@@ -269,32 +281,61 @@ class RAGGenerator:
             # Логируем запрос в историю для анализа интересов
             await self._log_query_to_history(user_id, query)
             
+            # A/B Test: Hybrid search vs Baseline
+            use_hybrid = (
+                ENHANCED_SEARCH_AVAILABLE and 
+                feature_flags and 
+                feature_flags.is_enabled('hybrid_search', user_id=user_id)
+            )
+            
             # Получаем релевантные документы через поиск
             search_results = []
             
-            if channels:
-                # Ищем по каждому каналу и объединяем результаты
-                for channel_id in channels:
-                    results = await search_service.search(
+            if use_hybrid:
+                # Новый: Hybrid search (Qdrant + Neo4j)
+                logger.info(f"🔬 A/B Test: Using HYBRID search for user {user_id}")
+                
+                try:
+                    search_results = await enhanced_search_service.search_with_graph_context(
                         query=query,
                         user_id=user_id,
-                        limit=context_limit // len(channels) + 1,
-                        channel_id=channel_id,
+                        limit=context_limit,
+                        channel_id=channels[0] if channels else None,
                         tags=tags,
                         date_from=date_from,
                         date_to=date_to
                     )
-                    search_results.extend(results)
-            else:
-                # Обычный поиск
-                search_results = await search_service.search(
-                    query=query,
-                    user_id=user_id,
-                    limit=context_limit,
-                    tags=tags,
-                    date_from=date_from,
-                    date_to=date_to
-                )
+                except Exception as e:
+                    logger.error(f"❌ Hybrid search failed, fallback to baseline: {e}")
+                    use_hybrid = False  # Fallback
+            
+            if not use_hybrid:
+                # Baseline: Обычный поиск через Qdrant
+                logger.info(f"📊 A/B Test: Using BASELINE search for user {user_id}")
+                
+                if channels:
+                    # Ищем по каждому каналу и объединяем результаты
+                    for channel_id in channels:
+                        results = await search_service.search(
+                            query=query,
+                            user_id=user_id,
+                            limit=context_limit // len(channels) + 1,
+                            channel_id=channel_id,
+                            tags=tags,
+                            date_from=date_from,
+                            date_to=date_to
+                        )
+                        search_results.extend(results)
+                else:
+                    # Обычный поиск
+                    search_results = await search_service.search(
+                        query=query,
+                        user_id=user_id,
+                        limit=context_limit,
+                        tags=tags,
+                        date_from=date_from,
+                        date_to=date_to
+                    )
             
             if not search_results:
                 return {

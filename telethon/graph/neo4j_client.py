@@ -24,8 +24,19 @@ import os
 from typing import List, Dict, Any, Optional
 import logging
 from datetime import datetime
+import time
 
 logger = logging.getLogger(__name__)
+
+# Import metrics (опционально)
+try:
+    from rag_service.metrics import record_graph_query, set_graph_availability
+    METRICS_AVAILABLE = True
+except ImportError:
+    logger.warning("⚠️ Metrics not available")
+    METRICS_AVAILABLE = False
+    record_graph_query = lambda *args, **kwargs: None
+    set_graph_availability = lambda *args: None
 
 # Lazy import Neo4j (может не быть установлен)
 try:
@@ -133,15 +144,19 @@ class Neo4jClient:
             True если подключение успешно
         """
         if not self.enabled or not self.driver:
+            set_graph_availability(False)
             return False
         
         try:
             async with self.driver.session() as session:
                 result = await session.run("RETURN 1 AS num")
                 record = await result.single()
-                return record["num"] == 1
+                is_healthy = record["num"] == 1
+                set_graph_availability(is_healthy)
+                return is_healthy
         except Exception as e:
             logger.error(f"❌ Neo4j health check failed: {e}")
+            set_graph_availability(False)
             return False
     
     async def create_user_node(self, telegram_id: int, username: Optional[str] = None):
@@ -464,6 +479,217 @@ class Neo4jClient:
                 
         except Exception as e:
             logger.error(f"❌ Failed to get user interests: {e}")
+            return []
+    
+    async def get_post_context(
+        self,
+        post_id: int,
+        depth: int = 1
+    ) -> Dict[str, Any]:
+        """
+        Получить граф-контекст для поста (для RAG)
+        
+        Args:
+            post_id: ID поста
+            depth: Глубина поиска (1 = прямые связи, 2 = связи 2-го уровня)
+            
+        Returns:
+            {
+                "related_posts": [...],  # Посты через общие теги
+                "tag_cluster": [...],    # Связанные теги  
+                "channel_posts": [...]   # Другие посты этого канала
+            }
+            
+        Best practice для RAG: собрать контекст вокруг поста
+        """
+        if not self.enabled or not self.driver:
+            return {"related_posts": [], "tag_cluster": [], "channel_posts": []}
+        
+        start = time.time()
+        try:
+            async with self.driver.session() as session:
+                query = """
+                // 1. Исходный пост
+                MATCH (p:Post {id: $post_id})
+                
+                // 2. Related posts через общие теги
+                MATCH (p)-[:HAS_TAG]->(t:Tag)<-[:HAS_TAG]-(related:Post)
+                WHERE related.id <> $post_id
+                WITH p, related, count(t) AS common_tags
+                ORDER BY common_tags DESC
+                LIMIT 5
+                
+                // 3. Собрать теги исходного поста
+                WITH p, collect({id: related.id, title: related.title, common_tags: common_tags}) AS related_posts
+                MATCH (p)-[:HAS_TAG]->(tag:Tag)
+                
+                // 4. Найти связанные теги
+                OPTIONAL MATCH (tag)-[r:RELATED_TO]-(related_tag:Tag)
+                WITH p, related_posts, collect(DISTINCT {tag: related_tag.name, weight: r.weight}) AS tag_cluster
+                
+                // 5. Другие посты из того же канала
+                MATCH (p)-[:FROM_CHANNEL]->(c:Channel)<-[:FROM_CHANNEL]-(channel_post:Post)
+                WHERE channel_post.id <> $post_id
+                WITH related_posts, tag_cluster, channel_post
+                ORDER BY channel_post.created_at DESC
+                LIMIT 3
+                
+                RETURN related_posts,
+                       tag_cluster,
+                       collect({id: channel_post.id, title: channel_post.title}) AS channel_posts
+                """
+                
+                result = await session.run(query, post_id=post_id)
+                record = await result.single()
+                
+                if record:
+                    duration = time.time() - start
+                    record_graph_query('get_post_context', duration, success=True)
+                    
+                    return {
+                        "related_posts": record["related_posts"] or [],
+                        "tag_cluster": [t for t in (record["tag_cluster"] or []) if t.get("tag")],
+                        "channel_posts": record["channel_posts"] or []
+                    }
+                
+                duration = time.time() - start
+                record_graph_query('get_post_context', duration, success=True)
+                return {"related_posts": [], "tag_cluster": [], "channel_posts": []}
+                
+        except Exception as e:
+            duration = time.time() - start
+            record_graph_query('get_post_context', duration, success=False)
+            logger.error(f"❌ Failed to get post context: {e}")
+            return {"related_posts": [], "tag_cluster": [], "channel_posts": []}
+    
+    async def get_trending_tags(
+        self,
+        days: int = 7,
+        limit: int = 10
+    ) -> List[Dict[str, Any]]:
+        """
+        Получить trending tags за период (для RAG personalization)
+        
+        Args:
+            days: Период в днях
+            limit: Количество топ тегов
+            
+        Returns:
+            Список trending тегов:
+            [{
+                "name": "AI",
+                "posts_count": 125,
+                "trend_score": 15.5  // Посты в день
+            }]
+            
+        Best practice: для персонализации дайджестов
+        """
+        if not self.enabled or not self.driver:
+            return []
+        
+        try:
+            async with self.driver.session() as session:
+                query = """
+                // Посты за последние N дней
+                MATCH (p:Post)-[:HAS_TAG]->(t:Tag)
+                WHERE p.created_at >= datetime() - duration({days: $days})
+                
+                // Подсчет по тегам
+                WITH t, count(p) AS posts_count
+                
+                RETURN t.name AS name,
+                       posts_count,
+                       round(toFloat(posts_count) / $days, 2) AS trend_score
+                ORDER BY posts_count DESC
+                LIMIT $limit
+                """
+                
+                result = await session.run(query, days=days, limit=limit)
+                
+                trending = []
+                async for record in result:
+                    trending.append({
+                        "name": record["name"],
+                        "posts_count": record["posts_count"],
+                        "trend_score": record["trend_score"]
+                    })
+                
+                return trending
+                
+        except Exception as e:
+            logger.error(f"❌ Failed to get trending tags: {e}")
+            return []
+    
+    async def expand_with_graph(
+        self,
+        post_ids: List[int],
+        limit_per_post: int = 3
+    ) -> List[Dict[str, Any]]:
+        """
+        Batch: расширить результаты через граф (для hybrid search)
+        
+        Args:
+            post_ids: Список ID постов (из vector search)
+            limit_per_post: Сколько related постов добавить для каждого
+            
+        Returns:
+            Список расширенных результатов:
+            [{
+                "source_post_id": 123,
+                "related_posts": [
+                    {"id": 456, "title": "...", "common_tags": 3},
+                    ...
+                ]
+            }]
+            
+        Best practice: один batch запрос вместо N отдельных
+        Используется в EnhancedSearchService для graph-aware ranking
+        """
+        if not self.enabled or not self.driver or not post_ids:
+            return []
+        
+        try:
+            async with self.driver.session() as session:
+                query = """
+                // Для каждого поста из списка
+                UNWIND $post_ids AS source_id
+                
+                // Найти related posts
+                MATCH (source:Post {id: source_id})-[:HAS_TAG]->(t:Tag)<-[:HAS_TAG]-(related:Post)
+                WHERE source.id <> related.id
+                
+                // Агрегировать
+                WITH source_id, related, count(DISTINCT t) AS common_tags
+                ORDER BY common_tags DESC
+                
+                // Лимит на каждый source post
+                WITH source_id, collect({
+                    id: related.id,
+                    title: related.title,
+                    common_tags: common_tags
+                })[..$limit_per_post] AS related_posts
+                
+                RETURN source_id, related_posts
+                """
+                
+                result = await session.run(
+                    query,
+                    post_ids=post_ids,
+                    limit_per_post=limit_per_post
+                )
+                
+                expanded = []
+                async for record in result:
+                    expanded.append({
+                        "source_post_id": record["source_id"],
+                        "related_posts": record["related_posts"]
+                    })
+                
+                logger.debug(f"✅ Expanded {len(post_ids)} posts with graph context")
+                return expanded
+                
+        except Exception as e:
+            logger.error(f"❌ Failed to expand with graph: {e}")
             return []
     
     async def close(self):

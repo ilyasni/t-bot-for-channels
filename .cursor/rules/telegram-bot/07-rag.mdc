@@ -2,11 +2,12 @@
 title: "RAG System"
 description: "Векторный поиск, AI-генерация, дайджесты, Qdrant"
 tags: ["rag", "vector-search", "ai", "qdrant", "embeddings"]
-version: "3.3"
+version: "3.4"
 ruleType: "autoAttached"
 priority: medium
 scope:
   - "telethon/rag_service/**"
+  - "telethon/voice_transcription_service.py"
   - "telethon/*rag*.py"
 ---
 
@@ -398,6 +399,56 @@ class IndexerService:
                     failed += 1
         
         return {"success": success, "failed": failed}
+```
+
+## 🎤 Voice Transcription
+
+### SaluteSpeech Integration
+
+```python
+# ✅ Correct - Voice transcription service
+from voice_transcription_service import SaluteSpeechClient
+
+# Инициализация клиента
+client = SaluteSpeechClient()
+
+# Транскрибация голосового сообщения
+async def transcribe_voice_message(voice_file_path: str) -> str:
+    """Транскрибирует голосовое сообщение в текст"""
+    try:
+        # Загрузка и конвертация в base64
+        with open(voice_file_path, "rb") as f:
+            audio_data = base64.b64encode(f.read()).decode()
+        
+        # Транскрибация через SaluteSpeech
+        result = await client.transcribe(audio_data)
+        return result.get("result", "")
+        
+    except Exception as e:
+        logger.error(f"Ошибка транскрибации: {e}")
+        return "Не удалось распознать голосовое сообщение"
+```
+
+### Voice Command Classification
+
+```python
+# ✅ Correct - Voice command processing
+async def process_voice_message(user_id: int, voice_file_path: str):
+    """Обрабатывает голосовое сообщение"""
+    
+    # 1. Транскрибация
+    text = await transcribe_voice_message(voice_file_path)
+    
+    # 2. Классификация команды (через n8n webhook)
+    command_type = await classify_voice_command(text)
+    
+    # 3. Выполнение команды
+    if command_type == "digest":
+        await generate_digest(user_id)
+    elif command_type == "search":
+        await search_posts(user_id, text)
+    elif command_type == "settings":
+        await show_settings(user_id)
 ```
 
 ## 🌐 RAG API Endpoints

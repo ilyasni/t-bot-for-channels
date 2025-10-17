@@ -30,6 +30,10 @@ pytz==2023.3
 langfuse>=2.0.0
 prometheus-client>=0.19.0
 
+# Rate Limiting & Retry
+aiolimiter>=1.1.0  # Rate limiting для GigaChat (1 concurrent request)
+tenacity>=8.2.0    # Exponential backoff retry
+
 # Note: sentence-transformers (опционально, ~3GB)
 # Раскомментируйте если нужен fallback для embeddings:
 # sentence-transformers==2.3.1

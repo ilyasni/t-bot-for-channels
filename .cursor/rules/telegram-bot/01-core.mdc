@@ -2,7 +2,7 @@
 title: "Telegram Bot Core Rules"
 description: "Основные правила и структура проекта Telegram Channel Parser Bot"
 tags: ["telegram", "core", "structure", "postgres", "timezone", "context7"]
-version: "3.2"
+version: "3.4"
 priority: critical
 autoAttach: true
 scope:
@@ -36,6 +36,7 @@ telethon/
 │   ├── features/             # Функции
 │   └── archive/              # Архив отчетов
 ├── rag_service/              # RAG микросервис
+├── maintenance/              # Unified retention service
 ├── scripts/                   # Скрипты
 │   ├── setup/
 │   ├── migrations/
@@ -54,10 +55,18 @@ parser_service.py         # Парсер каналов
 models.py                 # SQLAlchemy модели
 database.py               # Подключение к БД
 tagging_service.py        # AI тегирование
-cleanup_service.py        # Retention система
+# cleanup_service.py.deprecated  # Устаревший retention сервис
 qr_auth_manager.py        # QR Login менеджер
 admin_panel_manager.py    # Admin sessions
 shared_auth_manager.py    # Telethon клиенты
+```
+
+### Maintenance Services
+```python
+maintenance/
+├── unified_retention_service.py  # Централизованная очистка данных
+├── cleanup_scheduler.py          # Планировщик очистки
+└── data_retention.py.deprecated  # Устаревший сервис
 ```
 
 ## ⚠️ КРИТИЧНЫЕ ПРАВИЛА

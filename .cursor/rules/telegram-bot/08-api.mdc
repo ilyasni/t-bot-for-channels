@@ -2,12 +2,13 @@
 title: "API Endpoints"
 description: "FastAPI endpoints, структура, authentication, best practices"
 tags: ["api", "fastapi", "endpoints", "rest"]
-version: "3.3"
+version: "3.4"
 ruleType: "autoAttached"
 priority: medium
 scope:
   - "telethon/main.py"
   - "telethon/api_*.py"
+  - "telethon/telegram_formatter.py"
 ---
 
 # API Endpoints
@@ -231,6 +232,61 @@ class ChannelCreate(BaseModel):
 class UserUpdate(BaseModel):
     subscription_type: Optional[str] = Field(None, regex="^(free|trial|basic|premium|enterprise)$")
     max_channels: Optional[int] = Field(None, ge=1, le=999)
+```
+
+## 📱 Telegram HTML Formatting
+
+### HTML vs MarkdownV2
+
+```python
+# ✅ Correct - HTML формат (рекомендуется)
+from telegram_formatter import format_digest_for_telegram, escape_html
+
+# HTML проще и надежнее
+message = f"<b>📊 Дайджест</b>\n<i>{escape_html(title)}</i>"
+
+# ❌ Avoid - MarkdownV2 сложен для динамического контента
+# message = f"*📊 Дайджест*\n_{title}_"  # Проблемы с экранированием
+```
+
+### HTML Formatting Patterns
+
+```python
+# ✅ Correct - безопасное HTML форматирование
+def format_post_for_telegram(post: Post) -> str:
+    """Форматирует пост в HTML для Telegram"""
+    html_parts = []
+    
+    # Заголовок
+    html_parts.append(f"<b>{escape_html(post.title)}</b>")
+    
+    # Ссылка
+    if post.url:
+        html_parts.append(f'<a href="{post.url}">Читать полностью →</a>')
+    
+    # Теги
+    if post.tags:
+        tags_html = " ".join([f"#{escape_html(tag)}" for tag in post.tags])
+        html_parts.append(f"<i>{tags_html}</i>")
+    
+    return "\n".join(html_parts)
+```
+
+### Supported HTML Tags
+
+```python
+# ✅ Correct - поддерживаемые HTML теги
+SUPPORTED_TAGS = {
+    "bold": "<b>text</b>",
+    "italic": "<i>text</i>", 
+    "underline": "<u>text</u>",
+    "strikethrough": "<s>text</s>",
+    "code": "<code>text</code>",
+    "pre": "<pre>text</pre>",
+    "link": '<a href="url">text</a>',
+    "spoiler": "<tg-spoiler>text</tg-spoiler>",
+    "blockquote": "<blockquote>text</blockquote>"
+}
 ```
 
 ## 🏥 Health Check

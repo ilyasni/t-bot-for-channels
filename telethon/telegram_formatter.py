@@ -62,7 +62,15 @@ def format_digest_for_telegram(digest: Dict[str, Any], group_title: str) -> str:
         html_parts.append("<b>👥 Активные участники:</b>")
         html_parts.append("")
         for username, summary in speakers.items():
-            html_parts.append(f"• <code>@{escape(username)}</code>: {escape(summary)}")
+            # Создаем кликабельную ссылку на username
+            # Проверяем, что username не содержит пробелов (значит это username, а не first_name)
+            if ' ' not in username and len(username) > 0:
+                # Это username - создаем кликабельную ссылку
+                username_link = f'<a href="tg://resolve?domain={escape(username)}">@{escape(username)}</a>'
+                html_parts.append(f"• {username_link}: {escape(summary)}")
+            else:
+                # Это имя пользователя без username - просто текст
+                html_parts.append(f"• <b>{escape(username)}</b>: {escape(summary)}")
         html_parts.append("")
     
     # Резюме в blockquote для лучшей читаемости

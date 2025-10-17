@@ -2,13 +2,36 @@
 title: "Cursor Rules Changelog"
 description: "История изменений правил для Telegram Bot"
 tags: ["changelog", "versioning"]
-version: "3.3"
+version: "3.4"
 priority: low
 ruleType: "manual"
 autoAttach: false
 ---
 
 # Cursor Rules Changelog
+
+## [3.4.0] - 2025-10-15
+
+### 🎯 Maintenance & Organization Release
+
+**🆕 New Module:**
+- ✅ **11-maintenance.mdc** (450 lines) - Unified retention service
+  - Smart retention logic (учет digest frequency)
+  - Orphaned channels cleanup
+  - Dry run mode для безопасности
+  - Context7 best practices (PostgreSQL partitioning)
+
+**🔄 Updates:**
+- ✅ Обновлены все модульные правила до версии 3.4
+- ✅ Добавлены правила для maintenance services
+- ✅ Улучшена структура проекта в core rules
+- ✅ Очищена документация в корне проекта
+
+**📁 Project Organization:**
+- ✅ Перемещены implementation summaries в `docs/archive/implementation/`
+- ✅ Перемещены deployment docs в `docs/archive/deployment/`
+- ✅ Перемещены testing docs в `docs/archive/testing/`
+- ✅ Добавлены comprehensive unit tests для unified retention service
 
 ## [3.3.0] - 2025-10-13
 

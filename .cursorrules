@@ -1,7 +1,7 @@
 ---
 title: "Telegram Channel Parser Bot - Main Rules"
 description: "Entry point for Telegram Bot Cursor Rules system"
-version: "3.3.0"
+version: "3.4.0"
 priority: critical
 ruleType: "always"
 autoAttach: true
@@ -15,7 +15,7 @@ scope:
 
 > **Rule Type:** Always Applied  
 > **Lines:** < 500 (optimized for Cursor best practices)  
-> **Last Updated:** October 13, 2025
+> **Last Updated:** October 15, 2025
 
 This file serves as the **entry point** for the Telegram Bot Cursor Rules system.
 
@@ -33,6 +33,13 @@ The rules are organized into **10 modular files** in `.cursor/rules/telegram-bot
 8. **08-api.mdc** - FastAPI endpoints
 9. **09-external.mdc** - External services integration
 10. **10-groups.mdc** - Groups дайджесты, упоминания, n8n workflows
+
+## 🆕 Recent Updates (v3.4.0)
+
+- **Unified Retention Service** - Centralized cleanup with smart retention logic
+- **Context7 Integration** - Mandatory documentation lookup before coding
+- **Enhanced Testing** - Comprehensive unit tests for all services
+- **Project Organization** - Cleaned up documentation structure
 
 ## 🔴 Critical Rules (Always Apply)
 
@@ -265,5 +272,5 @@ When rules from multiple modules conflict:
 
 **See full documentation:** `.cursor/rules/telegram-bot/README.md`  
 **Changelog:** `.cursor/rules/telegram-bot/CHANGELOG.mdc`  
-**Version:** 3.2.0
+**Version:** 3.4.0
 

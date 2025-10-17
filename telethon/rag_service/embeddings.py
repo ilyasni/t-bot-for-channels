@@ -140,6 +140,7 @@ class EmbeddingsService:
     async def generate_embedding_gigachat(self, text: str) -> Optional[List[float]]:
         """
         Генерация embedding через GigaChat (gpt2giga-proxy)
+        С rate limiting (1 concurrent request) и exponential backoff retry
         
         Args:
             text: Текст для embeddings
@@ -149,6 +150,16 @@ class EmbeddingsService:
         """
         if not self.gigachat_enabled:
             return None
+        
+        # Импорты для rate limiting и retry
+        from rate_limiter import gigachat_rate_limiter
+        from tenacity import (
+            retry,
+            stop_after_attempt,
+            wait_exponential,
+            retry_if_exception_type,
+            RetryError
+        )
         
         # Prometheus metrics timing
         if rag_embeddings_duration_seconds:
@@ -167,38 +178,63 @@ class EmbeddingsService:
             if trace_ctx:
                 trace_ctx.__enter__()
             
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(
-                    self.gigachat_url,
-                    json={
-                        "input": text,
-                        "model": "EmbeddingsGigaR"  # Модель для embeddings в GigaChat
-                    }
-                )
-                
-                if response.status_code != 200:
-                    logger.error(f"❌ GigaChat embeddings error {response.status_code}: {response.text[:200]}")
-                    if rag_query_errors_total:
-                        rag_query_errors_total.labels(error_type='gigachat_api_error').inc()
-                    return None
-                
-                result = response.json()
-                embedding = result["data"][0]["embedding"]
-                
-                # Сохраняем размерность при первом запросе
-                if self.gigachat_vector_size is None:
-                    self.gigachat_vector_size = len(embedding)
-                    logger.info(f"✅ GigaChat vector size: {self.gigachat_vector_size}")
-                
-                # Update trace with result
-                if trace_ctx:
-                    trace = trace_ctx.__enter__()
-                    if trace:
-                        trace.update(metadata={"embedding_dim": len(embedding)})
-                    trace_ctx.__exit__(None, None, None)
-                
-                return embedding
-                
+            # Внутренняя функция с retry для GigaChat API
+            @retry(
+                retry=retry_if_exception_type(httpx.HTTPStatusError),
+                stop=stop_after_attempt(3),
+                wait=wait_exponential(multiplier=1, min=2, max=10),
+                reraise=True
+            )
+            async def _generate_with_retry():
+                # КРИТИЧНО: Rate limiter для 1 concurrent request
+                async with gigachat_rate_limiter:
+                    logger.debug("🔒 Acquired rate limit slot for GigaChat")
+                    
+                    async with httpx.AsyncClient(timeout=30.0) as client:
+                        response = await client.post(
+                            self.gigachat_url,
+                            json={
+                                "input": text,
+                                "model": "EmbeddingsGigaR"  # Модель для embeddings в GigaChat
+                            }
+                        )
+                        
+                        # Обработка 429 Rate Limit
+                        if response.status_code == 429:
+                            logger.warning(f"⚠️ GigaChat 429 Rate Limit, retry...")
+                            response.raise_for_status()  # Trigger retry
+                        
+                        # Обработка других ошибок
+                        if response.status_code != 200:
+                            logger.error(f"❌ GigaChat error {response.status_code}: {response.text[:200]}")
+                            response.raise_for_status()  # Trigger retry for 5xx errors
+                        
+                        return response.json()
+            
+            # Вызываем с retry
+            result = await _generate_with_retry()
+            embedding = result["data"][0]["embedding"]
+            
+            # Сохраняем размерность при первом запросе
+            if self.gigachat_vector_size is None:
+                self.gigachat_vector_size = len(embedding)
+                logger.info(f"✅ GigaChat vector size: {self.gigachat_vector_size}")
+            
+            # Update trace with result
+            if trace_ctx:
+                trace = trace_ctx.__enter__()
+                if trace:
+                    trace.update(metadata={"embedding_dim": len(embedding)})
+                trace_ctx.__exit__(None, None, None)
+            
+            return embedding
+            
+        except RetryError as e:
+            # Все retry попытки исчерпаны
+            logger.error(f"❌ GigaChat failed after all retries: {e}")
+            if rag_query_errors_total:
+                rag_query_errors_total.labels(error_type='gigachat_retry_exhausted').inc()
+            return None
         except httpx.TimeoutException as e:
             logger.error(f"❌ GigaChat timeout: {e}")
             if rag_query_errors_total:

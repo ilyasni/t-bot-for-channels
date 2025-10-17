@@ -2,12 +2,14 @@
 title: "External Services Integration"
 description: "Интеграция с Qdrant, Searxng, Crawl4AI, Ollama, n8n"
 tags: ["external", "integration", "qdrant", "crawl4ai", "ollama"]
-version: "3.3"
+version: "3.4"
 ruleType: "autoAttached"
 priority: low
 scope:
   - "telethon/integrations/**"
   - "telethon/*_client.py"
+  - "telethon/observability/**"
+  - "telethon/graph/**"
 ---
 
 # External Services Integration
@@ -26,6 +28,9 @@ scope:
 - **Crawl4AI** — веб-скрапинг (internal: `http://crawl4ai:11235`)
 - **Ollama** — локальные LLM (internal: `http://ollama:11434`)
 - **n8n/Flowise** — автоматизация (webhooks)
+- **Langfuse** — AI observability и трейсинг
+- **Prometheus** — метрики и мониторинг
+- **Neo4j** — Knowledge Graph для связей
 
 **Critical Pattern:**
 ```python
@@ -36,6 +41,76 @@ async with httpx.AsyncClient(timeout=30.0) as client:
 # ❌ НИКОГДА без timeout
 async with httpx.AsyncClient() as client:  # NO! Infinite wait!
     response = await client.get(url)
+```
+
+## 🔍 Observability Services
+
+### Langfuse (AI Tracing)
+
+```python
+# ✅ Correct - Langfuse integration
+from observability.langfuse_client import langfuse_client, observe
+
+@observe()
+async def generate_embedding(text: str):
+    """Автоматический трейсинг AI операций"""
+    # Langfuse автоматически отслеживает вызовы
+    return await gigachat_client.embed(text)
+
+# Graceful degradation
+if langfuse_client.enabled:
+    langfuse_client.flush()  # Перед shutdown
+```
+
+### Prometheus (Metrics)
+
+```python
+# ✅ Correct - Prometheus metrics
+from observability.metrics import (
+    rag_search_duration_seconds,
+    rag_embeddings_duration_seconds,
+    rag_query_errors_total
+)
+
+# В RAG операциях
+with rag_search_duration_seconds.time():
+    results = await qdrant_client.search(...)
+
+# При ошибках
+rag_query_errors_total.labels(
+    provider="gigachat",
+    error_type="rate_limit"
+).inc()
+```
+
+## 🧠 Neo4j (Knowledge Graph)
+
+### Configuration
+
+```python
+# ✅ Correct - Neo4j client
+from graph.neo4j_client import neo4j_client
+
+# Async session management
+async with neo4j_client.driver.session() as session:
+    result = await session.run(
+        "MATCH (p:Post)-[r:HAS_TAG]->(t:Tag) RETURN p, t LIMIT 10"
+    )
+```
+
+### Knowledge Graph Patterns
+
+```python
+# ✅ Correct - MERGE для идемпотентности
+async def create_post_node(post_id: int, title: str, content: str):
+    query = """
+    MERGE (p:Post {id: $post_id})
+    SET p.title = $title, p.content = $content, p.created_at = datetime()
+    RETURN p
+    """
+    
+    async with neo4j_client.driver.session() as session:
+        await session.run(query, post_id=post_id, title=title, content=content)
 ```
 
 ## 🔍 Qdrant (Vector Database)

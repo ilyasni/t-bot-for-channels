@@ -1,0 +1,187 @@
+{
+  "name": "Agent: Context Links Analyzer",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "execute-workflow-trigger",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract links from messages\nconst items = $input.all();\nconst data = items[0].json;\n\nconst messages = data.messages || [];\nconst topics = data.topics || [];\nconst assessment = data.assessment || {};\n\n// Extract all URLs from messages\nconst links = [];\nconst linkPattern = /https?:\\/\\/[^\\s<>\"]+/gi;\n\nfor (const msg of messages) {\n  const foundLinks = msg.text?.match(linkPattern) || [];\n  for (const link of foundLinks) {\n    if (!links.includes(link)) {\n      links.push(link);\n    }\n  }\n}\n\nconsole.log(`🔗 Found ${links.length} unique links in messages`);\nconsole.log(`🎯 Topics for search: ${topics.length}`);\n\nreturn [\n  {\n    json: {\n      links: links,\n      topics: topics,\n      assessment: assessment,\n      has_links: links.length > 0,\n      has_topics: topics.length > 0\n    }\n  }\n];"
+      },
+      "id": "extract-links",
+      "name": "Extract Links",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "combineOperation": "any"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.has_links }}",
+              "rightValue": "true",
+              "operator": {
+                "type": "boolean",
+                "operation": "equal"
+              }
+            },
+            {
+              "leftValue": "={{ $json.has_topics }}",
+              "rightValue": "true",
+              "operator": {
+                "type": "boolean",
+                "operation": "equal"
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "options": {}
+      },
+      "id": "has-context-to-analyze",
+      "name": "Has Context to Analyze?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Analyze links via Crawl4AI (if available)\nconst items = $input.all();\nconst data = items[0].json;\nconst links = data.links || [];\n\nconst linkSummaries = [];\n\n// Note: Crawl4AI integration требует дополнительной настройки\n// Для первой версии используем упрощенный подход\n\nfor (const link of links.slice(0, 3)) {  // Максимум 3 ссылки\n  try {\n    // Placeholder для Crawl4AI integration\n    // TODO: Implement actual Crawl4AI call when service is configured\n    \n    linkSummaries.push({\n      url: link,\n      title: \"Ссылка из обсуждения\",\n      summary: \"Анализ содержимого доступен в следующей версии (Crawl4AI integration)\"\n    });\n    \n  } catch (e) {\n    console.error(`Failed to analyze link ${link}:`, e.message);\n  }\n}\n\nreturn [\n  {\n    json: {\n      link_summaries: linkSummaries,\n      links_count: links.length,\n      analyzed_count: linkSummaries.length\n    }\n  }\n];"
+      },
+      "id": "analyze-links-crawl4ai",
+      "name": "Analyze Links (Crawl4AI)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Search external context via Searxng (if available)\nconst items = $input.all();\nconst extractData = $('Extract Links').first().json;\nconst topics = extractData.topics || [];\n\nconst externalContext = [];\n\n// Note: Searxng integration требует дополнительной настройки\n// Для первой версии используем упрощенный подход\n\nfor (const topic of topics.slice(0, 2)) {  // Максимум 2 темы\n  try {\n    // Placeholder для Searxng integration\n    // TODO: Implement actual Searxng call when service is configured\n    \n    externalContext.push({\n      topic: topic.name,\n      related_articles: [\n        {\n          title: `Статья по теме: ${topic.name}`,\n          snippet: \"Поиск дополнительного контекста доступен в следующей версии (Searxng integration)\",\n          url: \"\"\n        }\n      ]\n    });\n    \n  } catch (e) {\n    console.error(`Failed to search for topic ${topic.name}:`, e.message);\n  }\n}\n\nreturn [\n  {\n    json: {\n      external_context: externalContext,\n      topics_researched: externalContext.length\n    }\n  }\n];"
+      },
+      "id": "search-context-searxng",
+      "name": "Search Context (Searxng)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Merge results from link analysis and topic search\nconst items = $input.all();\n\n// Get results from both branches\nlet linkSummaries = [];\nlet externalContext = [];\n\ntry {\n  const crawlResult = $('Analyze Links (Crawl4AI)').first();\n  linkSummaries = crawlResult?.json?.link_summaries || [];\n} catch (e) {\n  console.log('No link summaries available');\n}\n\ntry {\n  const searchResult = $('Search Context (Searxng)').first();\n  externalContext = searchResult?.json?.external_context || [];\n} catch (e) {\n  console.log('No external context available');\n}\n\nconsole.log(`📊 Context analysis complete:`);\nconsole.log(`   Link summaries: ${linkSummaries.length}`);\nconsole.log(`   External context: ${externalContext.length}`);\n\nreturn [\n  {\n    json: {\n      link_summaries: linkSummaries,\n      external_context: externalContext,\n      has_external_data: linkSummaries.length > 0 || externalContext.length > 0\n    }\n  }\n];"
+      },
+      "id": "merge-context",
+      "name": "Merge Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Return empty context if no links/topics to analyze\nreturn [\n  {\n    json: {\n      link_summaries: [],\n      external_context: [],\n      has_external_data: false\n    }\n  }\n];"
+      },
+      "id": "no-context",
+      "name": "No External Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850, 600]
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Extract Links",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Links": {
+      "main": [
+        [
+          {
+            "node": "Has Context to Analyze?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Context to Analyze?": {
+      "main": [
+        [
+          {
+            "node": "Analyze Links (Crawl4AI)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Search Context (Searxng)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No External Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze Links (Crawl4AI)": {
+      "main": [
+        [
+          {
+            "node": "Merge Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Context (Searxng)": {
+      "main": [
+        [
+          {
+            "node": "Merge Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "No External Context": {
+      "main": [
+        [
+          {
+            "node": "Merge Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "updatedAt": "2025-10-14T19:20:00.000Z",
+  "versionId": "1"
+}
+

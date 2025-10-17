@@ -2,13 +2,14 @@
 title: "Groups Functionality"
 description: "Telegram Groups дайджесты, упоминания, n8n multi-agent workflows"
 tags: ["groups", "digest", "mentions", "n8n", "multi-agent"]
-version: "3.3"
+version: "3.4"
 ruleType: "autoAttached"
 priority: medium
 scope:
   - "telethon/*group*.py"
   - "telethon/bot.py"
   - "n8n/workflows/group*.json"
+  - "n8n/workflows/agent_*.json"
 ---
 
 # Groups Functionality
@@ -334,6 +335,64 @@ class GroupDigestGenerator:
             text += f"\n**Резюме:**\n{escape_markdown_v2(summary)}"
         
         return text
+```
+
+## 🤖 n8n Multi-Agent Workflows
+
+### Sub-workflows Architecture
+
+```python
+# ✅ Correct - n8n agent workflows
+AGENT_WORKFLOWS = {
+    "topic_extractor": "agent_topic_extractor.json",
+    "speaker_analyzer": "agent_speaker_analyzer.json", 
+    "summarizer": "agent_summarizer.json",
+    "supervisor": "agent_supervisor_synthesizer.json"
+}
+
+# Orchestrator workflow
+async def process_group_digest(group_id: int, messages: List[Message]):
+    """Обрабатывает дайджест группы через n8n agents"""
+    
+    # 1. Topic extraction
+    topics = await call_n8n_workflow(
+        "agent_topic_extractor",
+        {"messages": messages}
+    )
+    
+    # 2. Speaker analysis
+    speakers = await call_n8n_workflow(
+        "agent_speaker_analyzer", 
+        {"messages": messages}
+    )
+    
+    # 3. Summarization
+    summary = await call_n8n_workflow(
+        "agent_summarizer",
+        {"messages": messages, "topics": topics}
+    )
+    
+    # 4. Final synthesis
+    digest = await call_n8n_workflow(
+        "agent_supervisor_synthesizer",
+        {"topics": topics, "speakers": speakers, "summary": summary}
+    )
+    
+    return digest
+```
+
+### Agent Communication
+
+```python
+# ✅ Correct - n8n webhook calls
+async def call_n8n_workflow(workflow_name: str, data: Dict) -> Dict:
+    """Вызывает n8n workflow через webhook"""
+    n8n_url = f"http://n8n:5678/webhook/{workflow_name}"
+    
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        response = await client.post(n8n_url, json=data)
+        response.raise_for_status()
+        return response.json()
 ```
 
 ## 🎯 Markdown Escaping (CRITICAL!)

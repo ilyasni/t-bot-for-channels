@@ -26,17 +26,28 @@ class GroupDigestGenerator:
             "N8N_GROUP_DIGEST_WEBHOOK", 
             "http://n8n:5678/webhook/group-digest"
         )
+        # V2 Sequential webhook
+        self.n8n_digest_webhook_v2 = os.getenv(
+            "N8N_GROUP_DIGEST_WEBHOOK_V2",
+            "http://n8n:5678/webhook/group-digest-v2"
+        )
         self.n8n_mention_webhook = os.getenv(
             "N8N_MENTION_ANALYZER_WEBHOOK",
             "http://n8n:5678/webhook/mention-analyzer"
         )
         
         # Timeouts
-        self.digest_timeout = float(os.getenv("N8N_DIGEST_TIMEOUT", "120"))  # 2 минуты
+        self.digest_timeout = float(os.getenv("N8N_DIGEST_TIMEOUT", "120"))  # 2 минуты для V1, 3 минуты для V2
+        self.digest_timeout_v2 = float(os.getenv("N8N_DIGEST_TIMEOUT_V2", "180"))  # 3 минуты для sequential
         self.mention_timeout = float(os.getenv("N8N_MENTION_TIMEOUT", "60"))  # 1 минута
         
+        # Feature flags
+        self.use_v2_pipeline = os.getenv("USE_DIGEST_V2", "true").lower() == "true"
+        
         logger.info(f"✅ GroupDigestGenerator инициализирован")
-        logger.info(f"   Digest webhook: {self.n8n_digest_webhook}")
+        logger.info(f"   V1 Webhook: {self.n8n_digest_webhook}")
+        logger.info(f"   V2 Webhook: {self.n8n_digest_webhook_v2}")
+        logger.info(f"   Use V2 Pipeline: {self.use_v2_pipeline}")
         logger.info(f"   Mention webhook: {self.n8n_mention_webhook}")
     
     async def generate_digest(
@@ -82,6 +93,16 @@ class GroupDigestGenerator:
                         username = msg.sender.username
                     elif hasattr(msg.sender, 'first_name') and msg.sender.first_name:
                         username = msg.sender.first_name
+                    
+                    # DEBUG: проверить что у sender есть
+                    sender_info = f"sender_id={msg.sender.id if hasattr(msg.sender, 'id') else 'N/A'}"
+                    if hasattr(msg.sender, 'username'):
+                        sender_info += f", username={msg.sender.username}"
+                    if hasattr(msg.sender, 'first_name'):
+                        sender_info += f", first_name={msg.sender.first_name}"
+                    logger.debug(f"Message sender: {sender_info} → using username: {username}")
+                else:
+                    logger.warning(f"Message has no sender information!")
                 
                 formatted_messages.append({
                     "username": username,
@@ -89,12 +110,20 @@ class GroupDigestGenerator:
                     "date": msg.date.isoformat() if hasattr(msg.date, 'isoformat') else str(msg.date)
                 })
             
-            # Вызываем n8n workflow
-            async with httpx.AsyncClient(timeout=self.digest_timeout) as client:
-                logger.info(f"📡 Вызов n8n workflow: {self.n8n_digest_webhook}")
+            # DEBUG: Логируем уникальные usernames что отправляем
+            unique_usernames = set(m['username'] for m in formatted_messages)
+            logger.info(f"📤 Отправляем в n8n {len(formatted_messages)} сообщений от {len(unique_usernames)} пользователей: {', '.join(unique_usernames)}")
+            
+            # Вызываем n8n workflow (V1 или V2)
+            webhook_url = self.n8n_digest_webhook_v2 if self.use_v2_pipeline else self.n8n_digest_webhook
+            timeout = self.digest_timeout_v2 if self.use_v2_pipeline else self.digest_timeout
+            
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                logger.info(f"📡 Вызов n8n workflow: {webhook_url}")
+                logger.info(f"   Pipeline: {'V2 Sequential' if self.use_v2_pipeline else 'V1 Parallel'}")
                 
                 response = await client.post(
-                    self.n8n_digest_webhook,
+                    webhook_url,
                     json={
                         "messages": formatted_messages,
                         "user_id": user_id,
@@ -112,6 +141,18 @@ class GroupDigestGenerator:
                 logger.info(f"✅ Дайджест сгенерирован успешно")
                 logger.info(f"   Тем: {len(result.get('topics', []))}")
                 logger.info(f"   Спикеров: {len(result.get('speakers_summary', {}))}")
+                
+                # DEBUG: Логируем usernames из response
+                speakers = result.get('speakers_summary', {})
+                if speakers:
+                    speaker_list = ', '.join(speakers.keys())
+                    logger.info(f"📥 Получены speakers из n8n: {speaker_list}")
+                
+                # V2 enhancements
+                if self.use_v2_pipeline:
+                    logger.info(f"   Detail Level: {result.get('detail_level', 'unknown')}")
+                    logger.info(f"   Dialogue Type: {result.get('dialogue_type', 'unknown')}")
+                    logger.info(f"   Key Moments: {len(result.get('key_moments', []))}")
                 
                 return result
                 
@@ -209,16 +250,23 @@ class GroupDigestGenerator:
         """
         Форматирует дайджест для отправки в Telegram
         
-        Делегирует форматирование в telegram_formatter для автоматической
-        конвертации Markdown → MarkdownV2 с правильным экранированием.
+        V2: Если используется V2 pipeline, digest уже содержит готовый HTML в поле digest_html
+        V1: Делегирует форматирование в telegram_formatter
         
         Args:
             digest: Результат от generate_digest()
             group_title: Название группы
             
         Returns:
-            Отформатированное сообщение в MarkdownV2
+            Отформатированное сообщение в HTML
         """
+        # V2 Pipeline: используем готовый HTML от Supervisor Synthesizer
+        if self.use_v2_pipeline and 'digest_html' in digest:
+            logger.info("📄 Используем готовый HTML digest из V2 pipeline")
+            return digest['digest_html']
+        
+        # V1 Pipeline: форматируем через telegram_formatter
+        logger.info("📄 Форматируем digest через telegram_formatter (V1)")
         return telegram_formatter.format_digest_for_telegram(digest, group_title)
     
     def format_mention_for_telegram(

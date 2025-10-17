@@ -1,0 +1,68 @@
+{
+  "name": "Agent: Dialogue Assessor",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "execute-workflow-trigger",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Dialogue Assessment & Classification\nconst items = $input.all();\nconst data = items[0].json;\n\nconst messages = data.messages || [];\nconst messageCount = messages.length;\nconst messagesText = messages.map(m => m.text || '').join(' ');\nconst hours = data.hours || 24;\n\n// === HEURISTICS ===\n\n// Базовые метрики\nconst avgLength = messageCount > 0 ? messagesText.length / messageCount : 0;\nconst hasLinks = /https?:\\/\\//.test(messagesText);\nconst questionCount = (messagesText.match(/\\?/g) || []).length;\nconst hasDecisions = /(решили|договорились|согласились|утвердили|принято)/gi.test(messagesText);\nconst hasProblems = /(проблема|ошибка|баг|не работает|сломал|падает)/gi.test(messagesText);\nconst hasEmoticons = /(😊|😢|😠|🔥|👍|👎|❤️|💪)/g.test(messagesText);\nconst hasExclamations = (messagesText.match(/!+/g) || []).length;\nconst hasMultipleQuestions = (messagesText.match(/\\?\\?+/g) || []).length;\n\n// === DETERMINE DETAIL LEVEL ===\n\nlet detailLevel = \"standard\";\nif (messageCount <= 5) {\n  detailLevel = \"micro\";\n} else if (messageCount <= 15) {\n  detailLevel = \"minimal\";\n} else if (messageCount <= 50) {\n  detailLevel = \"standard\";\n} else if (messageCount <= 100) {\n  detailLevel = \"detailed\";\n} else {\n  detailLevel = \"comprehensive\";\n}\n\n// === DETECT DIALOGUE TYPE ===\n\nlet dialogueType = \"casual_chat\";\nif (hasDecisions && hasProblems) {\n  dialogueType = \"problem_solving\";\n} else if (hasDecisions && !hasProblems) {\n  dialogueType = \"business_meeting\";\n} else if (questionCount > messageCount * 0.3) {\n  dialogueType = \"brainstorming\";\n} else if (hasExclamations > messageCount * 0.2 || hasMultipleQuestions > 0) {\n  // Много эмоций или множественных вопросов - возможно конфликт\n  dialogueType = \"conflict_resolution\";\n}\n\n// === EMOTIONAL INTENSITY ===\n\nlet emotionalIntensity = 0.4; // default\nif (hasEmoticons) emotionalIntensity += 0.2;\nif (hasProblems) emotionalIntensity += 0.15;\nif (hasExclamations > messageCount * 0.15) emotionalIntensity += 0.2;\nif (dialogueType === \"conflict_resolution\") emotionalIntensity += 0.3;\nemotionalIntensity = Math.min(emotionalIntensity, 1.0);\n\n// === TOKEN BUDGETS ===\n\nconst budgets = {\n  micro: {\n    emotion: 100,\n    summary: 150\n  },\n  minimal: {\n    topics: 200,\n    emotion: 200,\n    summary: 300\n  },\n  standard: {\n    topics: 400,\n    emotion: 400,\n    speakers: 500,\n    key_moments: 800,\n    summary: 1000\n  },\n  detailed: {\n    topics: 600,\n    emotion: 600,\n    speakers: 700,\n    key_moments: 1200,\n    timeline: 800,\n    summary: 1500\n  },\n  comprehensive: {\n    topics: 800,\n    emotion: 800,\n    speakers: 900,\n    key_moments: 1500,\n    timeline: 1000,\n    context_links: 1000,\n    summary: 2000\n  }\n};\n\n// === DIALOGUE STRUCTURES ===\n\nconst dialogueStructures = {\n  business_meeting: {\n    structure: \"📋 Повестка → Обсуждение → Решения → Действия\",\n    focus: [\"decisions\", \"action_items\", \"deadlines\"],\n    emotion_weight: 0.3\n  },\n  brainstorming: {\n    structure: \"💡 Идеи → Развитие → Синтез → План\",\n    focus: [\"ideas\", \"alternatives\", \"creativity\"],\n    emotion_weight: 0.5\n  },\n  problem_solving: {\n    structure: \"⚠️ Проблема → Анализ → Решения → Выбор\",\n    focus: [\"problem\", \"root_cause\", \"solutions\", \"decision\"],\n    emotion_weight: 0.6\n  },\n  casual_chat: {\n    structure: \"💬 Темы → Обмен мнениями\",\n    focus: [\"topics\", \"opinions\"],\n    emotion_weight: 0.8,\n    digest_style: \"conversational\"\n  },\n  conflict_resolution: {\n    structure: \"🔥 Конфликт → Позиции → Компромисс → Договоренности\",\n    focus: [\"disagreements\", \"positions\", \"compromises\"],\n    emotion_weight: 0.9\n  }\n};\n\nconst structureInfo = dialogueStructures[dialogueType] || dialogueStructures.casual_chat;\n\nconsole.log(`📊 ASSESSMENT COMPLETE:`);\nconsole.log(`   Messages: ${messageCount}`);\nconsole.log(`   Detail Level: ${detailLevel}`);\nconsole.log(`   Dialogue Type: ${dialogueType}`);\nconsole.log(`   Emotional Intensity: ${emotionalIntensity.toFixed(2)}`);\nconsole.log(`   Has Decisions: ${hasDecisions}`);\nconsole.log(`   Has Problems: ${hasProblems}`);\nconsole.log(`   Has Links: ${hasLinks}`);\n\n// === RETURN ASSESSMENT ===\n\nreturn [\n  {\n    json: {\n      // Core assessment\n      detail_level: detailLevel,\n      dialogue_type: dialogueType,\n      dialogue_structure: structureInfo.structure,\n      focus_areas: structureInfo.focus,\n      \n      // Metrics\n      message_count: messageCount,\n      avg_message_length: avgLength,\n      emotional_intensity: emotionalIntensity,\n      emotion_weight: structureInfo.emotion_weight,\n      \n      // Flags\n      has_decisions: hasDecisions,\n      has_problems: hasProblems,\n      has_links: hasLinks,\n      has_questions: questionCount > 0,\n      has_emotions: hasEmoticons || hasExclamations > 0,\n      \n      // Agent activation\n      active_agents: getActiveAgents(detailLevel),\n      token_budgets: budgets[detailLevel],\n      \n      // Pass through\n      hours: hours,\n      messages: messages,\n      messages_text: data.messages_text || messagesText.substring(0, 5000)\n    }\n  }\n];\n\n// Helper: Determine which agents should be active\nfunction getActiveAgents(level) {\n  const agents = {\n    micro: [\"emotion\", \"summary\"],\n    minimal: [\"topics\", \"emotion\", \"summary\"],\n    standard: [\"topics\", \"emotion\", \"speakers\", \"key_moments\", \"summary\", \"synthesizer\"],\n    detailed: [\"topics\", \"emotion\", \"speakers\", \"key_moments\", \"timeline\", \"summary\", \"synthesizer\"],\n    comprehensive: [\"topics\", \"emotion\", \"speakers\", \"key_moments\", \"timeline\", \"context_links\", \"summary\", \"synthesizer\"]\n  };\n  return agents[level] || agents.standard;\n}"
+      },
+      "id": "assess-dialogue",
+      "name": "Assess Dialogue",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Return assessment as final output\nconst items = $input.all();\nconst assessment = items[0].json;\n\nconsole.log('✅ Assessment ready to return');\n\nreturn [\n  {\n    json: {\n      assessment: assessment\n    }\n  }\n];"
+      },
+      "id": "return-assessment",
+      "name": "Return Assessment",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 300]
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Assess Dialogue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Assess Dialogue": {
+      "main": [
+        [
+          {
+            "node": "Return Assessment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "updatedAt": "2025-10-14T19:00:00.000Z",
+  "versionId": "1"
+}
+
+

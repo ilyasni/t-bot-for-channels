@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks, Header
 from datetime import datetime, timedelta, timezone
 from auth import get_user_client, check_user_auth_status, logout_user, disconnect_all_clients
 from database import get_db, SessionLocal
@@ -18,6 +18,10 @@ except ImportError:
 
 # Prometheus metrics
 from prometheus_client import make_asgi_app
+
+# Maintenance services
+from maintenance.cleanup_scheduler import cleanup_scheduler
+from maintenance.unified_retention_service import unified_retention_service
 
 # Logger для main.py
 logger = logging.getLogger(__name__)
@@ -71,6 +75,16 @@ class RetentionSettingsUpdate(BaseModel):
     retention_days: int = Field(..., ge=1, le=365, description="Период хранения постов в днях (от 1 до 365)")
     run_cleanup_immediately: bool = Field(False, description="Запустить очистку немедленно после изменения")
 
+class CleanupResponse(BaseModel):
+    """Response model для cleanup endpoint"""
+    status: str
+    cutoff_date: str
+    retention_days: int
+    dry_run: bool
+    deleted_count: dict
+    errors: list
+    timestamp: str
+
 @app.on_event("startup")
 async def startup_event():
     try:
@@ -78,6 +92,14 @@ async def startup_event():
         # Создаем таблицы при запуске
         from database import create_tables
         create_tables()
+        
+        # Запускаем cleanup scheduler (если включен)
+        try:
+            cleanup_scheduler.start()
+            logger.info("✅ Cleanup scheduler started")
+        except Exception as e:
+            logger.warning(f"⚠️ Cleanup scheduler failed to start: {e}")
+        
     except Exception as e:
         print(f"❌ Критическая ошибка инициализации: {str(e)}")
         raise HTTPException(500, f"Ошибка инициализации системы: {str(e)}")
@@ -87,6 +109,30 @@ async def shutdown_event():
     try:
         await disconnect_all_clients()
         print("🔌 Все клиенты отключены")
+        
+        # Останавливаем cleanup scheduler
+        try:
+            cleanup_scheduler.stop()
+            logger.info("✅ Cleanup scheduler stopped")
+        except Exception as e:
+            logger.warning(f"⚠️ Cleanup scheduler failed to stop: {e}")
+        
+        # Закрываем Neo4j connection
+        try:
+            from graph.neo4j_client import neo4j_client
+            await neo4j_client.close()
+            logger.info("✅ Neo4j connection closed")
+        except Exception as e:
+            logger.warning(f"⚠️ Neo4j close failed: {e}")
+        
+        # Закрываем Redis cache
+        try:
+            from rag_service.graph_cache import graph_cache
+            await graph_cache.close()
+            logger.info("✅ GraphCache closed")
+        except Exception as e:
+            logger.warning(f"⚠️ GraphCache close failed: {e}")
+            
     except Exception as e:
         print(f"❌ Ошибка отключения клиентов: {str(e)}")
 
@@ -2684,3 +2730,222 @@ async def graph_health_check():
         "neo4j_enabled": neo4j_client.enabled,
         "neo4j_connected": is_healthy
     }
+
+
+# ========================================
+# Admin Endpoints
+# ========================================
+
+@app.post("/admin/cleanup", response_model=CleanupResponse)
+async def manual_cleanup(
+    dry_run: bool = True,
+    api_key: str = Header(..., alias="api-key")
+):
+    """
+    Ручной запуск data retention cleanup
+    
+    **Requires:** ADMIN_API_KEY в заголовке
+    
+    Args:
+        dry_run: Если True, только подсчет без удаления (default: True)
+        api_key: Admin API key (header: api-key)
+        
+    Returns:
+        CleanupResponse с результатами cleanup
+        
+    Example:
+        ```bash
+        curl -X POST http://localhost:8010/admin/cleanup?dry_run=true \\
+          -H "api-key: your_admin_key"
+        ```
+    """
+    # Проверка API key
+    admin_api_key = os.getenv("ADMIN_API_KEY")
+    if not admin_api_key:
+        raise HTTPException(
+            500,
+            "ADMIN_API_KEY not configured in .env"
+        )
+    
+    if api_key != admin_api_key:
+        raise HTTPException(
+            401,
+            "Unauthorized: Invalid API key"
+        )
+    
+    try:
+        logger.info(f"🧹 Manual cleanup triggered (dry_run={dry_run})")
+        
+        # Выполнить cleanup
+        result = await retention_service.cleanup_all(dry_run=dry_run)
+        
+        # Log results
+        deleted_count = result.get('deleted_count', {})
+        errors = result.get('errors', [])
+        
+        logger.info(f"✅ Cleanup complete: PostgreSQL={deleted_count.get('postgres', 0)}, "
+                   f"Neo4j={deleted_count.get('neo4j', 0)}, "
+                   f"Qdrant={deleted_count.get('qdrant', 0)}")
+        
+        if errors:
+            logger.warning(f"⚠️ Cleanup errors: {errors}")
+        
+        return CleanupResponse(
+            status="success" if not errors else "partial_success",
+            cutoff_date=result.get('cutoff_date', ''),
+            retention_days=result.get('retention_days', 120),
+            dry_run=dry_run,
+            deleted_count=deleted_count,
+            errors=errors,
+            timestamp=result.get('timestamp', datetime.now(timezone.utc).isoformat())
+        )
+        
+    except Exception as e:
+        logger.error(f"❌ Cleanup failed: {e}", exc_info=True)
+        raise HTTPException(
+            500,
+            f"Cleanup failed: {str(e)}"
+        )
+
+
+@app.get("/admin/cleanup/status")
+async def cleanup_status(api_key: str = Header(..., alias="api-key")):
+    """
+    Получить статус cleanup scheduler
+    
+    **Requires:** ADMIN_API_KEY в заголовке
+    
+    Returns:
+        {
+            "scheduler_enabled": true,
+            "scheduler_running": true,
+            "retention_days": 120,
+            "next_run": "2025-10-15T03:00:00+00:00",
+            "last_run": "2025-10-14T03:00:00+00:00"
+        }
+    """
+    # Проверка API key
+    admin_api_key = os.getenv("ADMIN_API_KEY")
+    if not admin_api_key:
+        raise HTTPException(500, "ADMIN_API_KEY not configured")
+    
+    if api_key != admin_api_key:
+        raise HTTPException(401, "Unauthorized: Invalid API key")
+    
+    try:
+        # Статус scheduler
+        scheduler_enabled = cleanup_scheduler.enabled
+        scheduler_running = cleanup_scheduler.scheduler.running if cleanup_scheduler.scheduler else False
+        
+        # Next run time
+        next_run = None
+        last_run = None
+        if scheduler_running:
+            job = cleanup_scheduler.scheduler.get_job('data_retention_cleanup')
+            if job:
+                next_run = job.next_run_time.isoformat() if job.next_run_time else None
+        
+        return {
+            "scheduler_enabled": scheduler_enabled,
+            "scheduler_running": scheduler_running,
+            "base_retention_days": unified_retention_service.base_retention_days,
+            "min_retention_days": unified_retention_service.min_retention_days,
+            "schedule": cleanup_scheduler.schedule,
+            "next_run": next_run,
+            "last_run": last_run  # TODO: track last run
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Status check failed: {e}")
+        raise HTTPException(500, f"Status check failed: {str(e)}")
+
+
+@app.post("/admin/cleanup/dry-run")
+async def cleanup_dry_run(api_key: str = Header(..., alias="api-key")):
+    """
+    Показать что будет удалено (без удаления)
+    
+    **Requires:** ADMIN_API_KEY в заголовке
+    
+    Returns:
+        Статистика того, что будет удалено
+    """
+    # Проверка API key
+    admin_api_key = os.getenv("ADMIN_API_KEY")
+    if not admin_api_key:
+        raise HTTPException(500, "ADMIN_API_KEY not configured")
+    
+    if api_key != admin_api_key:
+        raise HTTPException(401, "Unauthorized: Invalid API key")
+    
+    try:
+        logger.info("🔍 Starting dry run cleanup")
+        result = await unified_retention_service.cleanup_all_users(dry_run=True)
+        
+        logger.info(f"📊 Dry run result: {result.get('total_posts_deleted', 0)} posts would be deleted")
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"❌ Dry run failed: {e}", exc_info=True)
+        raise HTTPException(500, f"Dry run failed: {str(e)}")
+
+
+@app.post("/admin/cleanup/execute")
+async def cleanup_execute(api_key: str = Header(..., alias="api-key")):
+    """
+    Выполнить cleanup (только для админов)
+    
+    **Requires:** ADMIN_API_KEY в заголовке
+    
+    Returns:
+        Статистика выполненной очистки
+    """
+    # Проверка API key
+    admin_api_key = os.getenv("ADMIN_API_KEY")
+    if not admin_api_key:
+        raise HTTPException(500, "ADMIN_API_KEY not configured")
+    
+    if api_key != admin_api_key:
+        raise HTTPException(401, "Unauthorized: Invalid API key")
+    
+    try:
+        logger.info("🧹 Starting manual cleanup execution")
+        result = await unified_retention_service.cleanup_all_users(dry_run=False)
+        
+        logger.info(f"✅ Manual cleanup result: {result.get('total_posts_deleted', 0)} posts deleted")
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"❌ Manual cleanup failed: {e}", exc_info=True)
+        raise HTTPException(500, f"Manual cleanup failed: {str(e)}")
+
+
+@app.get("/admin/cleanup/stats")
+async def cleanup_stats(api_key: str = Header(..., alias="api-key")):
+    """
+    Статистика по retention для всех пользователей
+    
+    **Requires:** ADMIN_API_KEY в заголовке
+    
+    Returns:
+        Детальная статистика retention
+    """
+    # Проверка API key
+    admin_api_key = os.getenv("ADMIN_API_KEY")
+    if not admin_api_key:
+        raise HTTPException(500, "ADMIN_API_KEY not configured")
+    
+    if api_key != admin_api_key:
+        raise HTTPException(401, "Unauthorized: Invalid API key")
+    
+    try:
+        logger.info("📊 Getting retention statistics")
+        stats = await unified_retention_service.get_retention_stats()
+        
+        return stats
+        
+    except Exception as e:
+        logger.error(f"❌ Stats retrieval failed: {e}", exc_info=True)
+        raise HTTPException(500, f"Stats retrieval failed: {str(e)}")

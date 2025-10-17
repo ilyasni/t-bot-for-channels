@@ -1,0 +1,249 @@
+---
+title: "Maintenance & Retention"
+description: "Unified retention service, cleanup policies, data lifecycle"
+tags: ["maintenance", "retention", "cleanup", "data-lifecycle"]
+version: "3.4"
+priority: medium
+autoAttach: true
+scope:
+  - "telethon/maintenance/**"
+  - "telethon/cleanup_service.py*"
+---
+# Maintenance & Retention System
+
+> **Rule Type:** Auto-Attached  
+> **Lines:** < 500 (optimized)  
+> **Priority:** Medium
+
+## 🎯 High-Level Overview
+
+**Unified Retention Service** — централизованная система очистки данных с учетом digest frequency и best practices.
+
+**Key Features:**
+- Smart retention logic (учет digest frequency)
+- Orphaned channels cleanup
+- Dry run mode для безопасности
+- Context7 best practices (PostgreSQL partitioning)
+
+## 🚀 Critical Patterns
+
+### 1. Smart Retention Logic
+
+```python
+# ✅ Correct - smart retention calculation
+retention = max(
+    90,  # Базовый минимум (3 месяца для RAG/search)
+    digest_period * 2,  # Запас для дайджестов
+    user.retention_days  # Пользовательская настройка
+)
+
+# Примеры:
+# User с daily digest: max(90, 1*2, 30) = 90 дней
+# User с weekly digest: max(90, 7*2, 30) = 90 дней
+# User с monthly digest: max(90, 30*2, 30) = 90 дней
+# User с retention_days=365: max(90, 14, 365) = 365 дней
+```
+
+### 2. Orphaned Channels Cleanup
+
+```python
+# ✅ Correct - cleanup каналов без подписчиков
+orphaned_channels = db.query(Channel).filter(
+    ~Channel.id.in_(
+        db.query(user_channel.c.channel_id).filter(
+            user_channel.c.is_active == True
+        )
+    )
+).all()
+
+# Удаляем посты старше 30 дней для orphaned каналов
+cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+```
+
+### 3. Dry Run Mode
+
+```python
+# ✅ Correct - всегда поддерживать dry run
+async def cleanup_user_posts(self, user_id: int, dry_run: bool = False):
+    if dry_run:
+        # Только подсчет, без удаления
+        return {"posts_deleted": count, "dry_run": True}
+    else:
+        # Реальное удаление
+        deleted = posts_query.delete()
+        return {"posts_deleted": deleted, "dry_run": False}
+```
+
+### 4. Context7 Best Practices
+
+```python
+# ✅ Correct - PostgreSQL partitioning patterns
+# Вместо DELETE (медленно):
+# DROP TABLE posts_2024_07;  # Мгновенно
+
+# Или DETACH для архивирования:
+# ALTER TABLE posts DETACH PARTITION posts_2024_07;
+
+# Sequential cleanup: PostgreSQL → Neo4j → Qdrant
+```
+
+## 📊 Retention Policies
+
+### Minimum Retention: 90 Days
+
+```python
+# ✅ Correct - минимум для RAG/search
+self.min_retention_days = 90  # Абсолютный минимум
+
+# Гарантирует:
+# - Достаточно данных для RAG (3 месяца контекста)
+# - Работа векторного поиска
+# - Trending tags analysis
+```
+
+### Digest Frequency Consideration
+
+```python
+# ✅ Correct - учет digest frequency
+if digest_settings.frequency == "daily":
+    digest_period = 1
+elif digest_settings.frequency == "weekly":
+    digest_period = 7
+elif digest_settings.frequency == "monthly":
+    digest_period = 30
+
+# Запас для дайджестов: period * 2
+digest_retention = digest_period * 2
+```
+
+## 🔧 API Endpoints
+
+### Admin Cleanup Endpoints
+
+```python
+# ✅ Correct - admin-only endpoints
+@app.post("/admin/cleanup/dry-run")
+async def cleanup_dry_run(api_key: str = Header(..., alias="api-key")):
+    """Показать что будет удалено (без удаления)"""
+    result = await unified_retention_service.cleanup_all_users(dry_run=True)
+    return result
+
+@app.post("/admin/cleanup/execute")
+async def cleanup_execute(api_key: str = Header(..., alias="api-key")):
+    """Выполнить cleanup (только для админов)"""
+    result = await unified_retention_service.cleanup_all_users(dry_run=False)
+    return result
+
+@app.get("/admin/cleanup/stats")
+async def cleanup_stats(api_key: str = Header(..., alias="api-key")):
+    """Статистика по retention для всех пользователей"""
+    return await unified_retention_service.get_retention_stats()
+```
+
+## 🧪 Testing Patterns
+
+### Unit Tests
+
+```python
+# ✅ Correct - comprehensive testing
+@pytest.mark.asyncio
+async def test_calculate_retention_period_weekly_digest():
+    """Test retention calculation for weekly digest"""
+    retention = await retention_service.calculate_retention_period(1)
+    assert retention == 90  # max(90, 7*2, 30) = 90
+
+@pytest.mark.asyncio
+async def test_cleanup_orphaned_channels_dry_run():
+    """Test orphaned channels cleanup in dry run mode"""
+    result = await retention_service.cleanup_orphaned_channels(dry_run=True)
+    assert result >= 0  # Should not delete anything
+```
+
+### Integration Tests
+
+```python
+# ✅ Correct - workflow testing
+def test_full_cleanup_workflow():
+    """Test complete cleanup workflow"""
+    service = UnifiedRetentionService(base_retention_days=90)
+    
+    # Test that all methods exist and are callable
+    assert hasattr(service, 'calculate_retention_period')
+    assert hasattr(service, 'cleanup_orphaned_channels')
+    assert hasattr(service, 'cleanup_user_posts')
+    assert hasattr(service, 'cleanup_all_users')
+    assert hasattr(service, 'get_retention_stats')
+```
+
+## 🚨 Common Pitfalls & Solutions
+
+| Problem | Consequence | Solution |
+|---------|-------------|----------|
+| **No digest frequency consideration** | Удаляет посты нужные для дайджестов | Smart retention: max(90, digest_period*2, user.retention_days) |
+| **Orphaned channels not cleaned** | Посты каналов без подписчиков хранятся вечно | Weekly orphaned channels cleanup |
+| **No dry run mode** | Опасные операции без предварительного просмотра | Always support dry_run parameter |
+| **Hard retention cutoff** | Не учитывает разные digest frequency | Dynamic retention calculation |
+| **No Context7 patterns** | Медленная очистка больших объемов | PostgreSQL partitioning patterns |
+
+## ✅ Verification Checklist
+
+After implementing retention logic, verify:
+
+1. **Smart retention:**
+   - [ ] Учитывает digest frequency
+   - [ ] Минимум 90 дней для RAG/search
+   - [ ] Пользовательские настройки respected
+
+2. **Orphaned channels:**
+   - [ ] Cleanup каналов без подписчиков
+   - [ ] Удаление постов старше 30 дней
+   - [ ] Сам канал остается для истории
+
+3. **Dry run mode:**
+   - [ ] Все cleanup методы поддерживают dry_run
+   - [ ] Dry run показывает что будет удалено
+   - [ ] Real cleanup выполняет удаление
+
+4. **API endpoints:**
+   - [ ] Admin-only access с API key
+   - [ ] Dry run endpoint для безопасности
+   - [ ] Stats endpoint для мониторинга
+
+5. **Testing:**
+   - [ ] Unit tests для всех методов
+   - [ ] Integration tests для workflow
+   - [ ] Edge cases покрыты
+
+## 🔄 Migration Path
+
+### From Old Services
+
+```python
+# ❌ Old (deprecated)
+from cleanup_service import cleanup_service
+from maintenance.data_retention import retention_service
+
+# ✅ New (unified)
+from maintenance.unified_retention_service import unified_retention_service
+```
+
+### Scheduler Integration
+
+```python
+# ✅ Correct - unified scheduler
+from maintenance.cleanup_scheduler import cleanup_scheduler
+
+# Daily cleanup в 03:00 AM
+cleanup_scheduler.add_job(
+    unified_retention_service.cleanup_all_users,
+    'cron',
+    hour=3,
+    minute=0
+)
+```
+
+---
+
+**See also:** `01-core.mdc` (Context7 integration), `03-database.mdc` (PostgreSQL patterns)  
+**Changelog:** `CHANGELOG.mdc`  
+**Version:** 3.4

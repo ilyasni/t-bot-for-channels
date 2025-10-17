@@ -1,0 +1,104 @@
+{
+  "name": "Agent: Emotion Analyzer",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "execute-workflow-trigger",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Prepare emotion analysis prompt\nconst items = $input.all();\nconst data = items[0].json;\n\nconst assessment = data.assessment || {};\nconst topics = data.topics || [];\nconst messagesText = data.messages_text || \"\";\nconst detailLevel = assessment.detail_level || \"standard\";\nconst dialogueType = assessment.dialogue_type || \"casual_chat\";\n\n// Safely calculate max_tokens\nconst maxTokens = (assessment.token_budgets && assessment.token_budgets.emotion) ? assessment.token_budgets.emotion : 400;\n\n// === BUILD ADAPTIVE PROMPT ===\n\nlet prompt = \"\";\n\nif (detailLevel === \"micro\") {\n  prompt = `Определи эмоциональный тон короткого диалога ОДНИМ СЛОВОМ + эмодзи.\\n\\nСООБЩЕНИЯ:\\n${messagesText}\\n\\nПримеры: \"дружелюбный 😊\", \"нейтральный 😐\", \"напряженный 😰\"\\n\\nВерни ТОЛЬКО JSON: {\"tone\": \"слово эмодзи\"}`;\n  \n} else if (detailLevel === \"minimal\") {\n  prompt = `Проанализируй эмоциональный окрас диалога.\\n\\nТИП ДИАЛОГА: ${dialogueType}\\n\\nСООБЩЕНИЯ:\\n${messagesText}\\n\\nОпредели:\\n1. Общий тон (positive/neutral/negative)\\n2. Интенсивность (0.0-1.0)\\n3. Атмосфера (1 предложение)\\n\\nФОРМАТ:\\n{\\n  \"overall_tone\": \"positive|neutral|negative\",\\n  \"tone_intensity\": 0.5,\\n  \"atmosphere\": \"Краткое описание атмосферы\"\\n}\\n\\nВАЖНО: Верни ТОЛЬКО валидный JSON без markdown блоков!`;\n  \n} else if (detailLevel === \"standard\") {\n  prompt = `Проанализируй эмоциональный окрас диалога.\\n\\nТИП ДИАЛОГА: ${dialogueType}\\nУРОВЕНЬ: standard\\n\\nТЕМЫ ОБСУЖДЕНИЯ:\\n${topics.map(t => `- ${t.name}`).join('\\n')}\\n\\nСООБЩЕНИЯ:\\n${messagesText}\\n\\nОпредели:\\n\\n1. ОБЩИЙ ТОН:\\n   - positive/neutral/negative\\n   - Интенсивность (0.0-1.0)\\n   - Атмосфера (1-2 предложения)\\n\\n2. ЭМОЦИИ ПО ТЕМАМ:\\n   - Для каждой темы: доминирующая эмоция\\n   - Примеры: concern, enthusiasm, frustration, curiosity, satisfaction\\n\\n3. ИНДИКАТОРЫ (0.0-1.0):\\n   - Конфликт\\n   - Сотрудничество\\n   - Стресс/напряжение\\n   - Энтузиазм\\n\\nФОРМАТ:\\n{\\n  \"overall_tone\": \"neutral\",\\n  \"tone_intensity\": 0.6,\\n  \"atmosphere\": \"Профессиональное обсуждение с элементами беспокойства\",\\n  \"emotions_by_topic\": {\\n    \"тема1\": \"concern\",\\n    \"тема2\": \"neutral\"\\n  },\\n  \"indicators\": {\\n    \"conflict\": 0.2,\\n    \"collaboration\": 0.8,\\n    \"stress\": 0.4,\\n    \"enthusiasm\": 0.6\\n  }\\n}\\n\\nВАЖНО: Верни ТОЛЬКО валидный JSON!`;\n  \n} else {\n  prompt = `Проведи глубокий эмоциональный анализ диалога.\\n\\nТИП ДИАЛОГА: ${dialogueType}\\nУРОВЕНЬ: ${detailLevel}\\n\\nТЕМЫ ОБСУЖДЕНИЯ:\\n${topics.map(t => `- ${t.name} (приоритет: ${t.priority || 'medium'})`).join('\\n')}\\n\\nСООБЩЕНИЯ:\\n${messagesText}\\n\\nПроведи полный анализ:\\n\\n1. ОБЩИЙ ТОН И АТМОСФЕРА:\\n   - Тон: positive/neutral/negative\\n   - Интенсивность: 0.0-1.0\\n   - Атмосфера: детальное описание (2-3 предложения)\\n\\n2. ЭМОЦИИ ПО ТЕМАМ:\\n   - Для каждой темы: доминирующие эмоции\\n   - Кто выражал какие эмоции\\n   - Пример: {\"тема\": {\"dominant_emotion\": \"concern\", \"participants_emotions\": {\"@user\": \"worried\"}}}\\n\\n3. ЭМОЦИОНАЛЬНАЯ ДИНАМИКА:\\n   - Как начался диалог эмоционально\\n   - Были ли эмоциональные пики (и когда)\\n   - Как завершился\\n   - Краткая arc в одном предложении\\n\\n4. ИНДИКАТОРЫ (0.0-1.0):\\n   - conflict: уровень конфликта\\n   - collaboration: качество сотрудничества\\n   - stress: уровень стресса/напряжения\\n   - enthusiasm: уровень энтузиазма\\n\\n5. ПРЕОБЛАДАЮЩИЕ ЭМОЦИИ (если уровень detailed+):\\n   - Топ-3 эмоции с процентами\\n   - Пример: \"Озабоченность (40%), Ответственность (35%), Конструктивность (25%)\"\\n\\nФОРМАТ:\\n{\\n  \"overall_tone\": \"neutral\",\\n  \"tone_intensity\": 0.65,\\n  \"atmosphere\": \"...\",\\n  \"emotions_by_topic\": {...},\\n  \"emotional_arc\": \"Начался спокойно → пик напряжения → завершился конструктивно\",\\n  \"indicators\": {...},\\n  \"dominant_emotions\": \"Озабоченность (40%), Ответственность (35%), Конструктивность (25%)\",\\n  \"emotional_peaks\": [\\n    {\"time\": \"12:45\", \"emotion\": \"concern\", \"trigger\": \"Выявление проблемы\"}\\n  ]\\n}\\n\\nВАЖНО: Верни ТОЛЬКО валидный JSON!`;\n}\n\nreturn [\n  {\n    json: {\n      prompt: prompt,\n      max_tokens: maxTokens,\n      detail_level: detailLevel,\n      dialogue_type: dialogueType\n    }\n  }\n];"
+      },
+      "id": "prepare-emotion-prompt",
+      "name": "Prepare Emotion Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://gpt2giga-proxy:8090/v1/chat/completions",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\"model\": \"GigaChat\", \"messages\": [{\"role\": \"system\", \"content\": \"Ты - эксперт по эмоциональному анализу диалогов. Анализируешь тон, атмосферу, эмоциональную динамику разговоров. Всегда возвращай валидный JSON.\"}, {\"role\": \"user\", \"content\": $json.prompt}], \"temperature\": 0.4, \"max_tokens\": $json.max_tokens} }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "gigachat-emotion",
+      "name": "GigaChat: Analyze Emotions",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse GigaChat emotion analysis response\nconst items = $input.all();\nconst response = items[0].json.choices?.[0]?.message?.content || '{}';\nconst detailLevel = $('Prepare Emotion Prompt').first().json.detail_level;\n\nlet emotions = {};\n\ntry {\n  // Remove markdown code blocks if present\n  let cleanContent = response.trim();\n  if (cleanContent.startsWith('```')) {\n    const lines = cleanContent.split('\\n');\n    cleanContent = lines.slice(1, -1).join('\\n').trim();\n    if (cleanContent.startsWith('json')) {\n      cleanContent = cleanContent.slice(4).trim();\n    }\n  }\n  \n  // Parse JSON\n  emotions = JSON.parse(cleanContent);\n  \n  console.log(`✅ Emotion analysis успешно:`);\n  console.log(`   Overall tone: ${emotions.overall_tone || emotions.tone || 'unknown'}`);\n  console.log(`   Intensity: ${emotions.tone_intensity || 'N/A'}`);\n  \n} catch (e) {\n  console.error('❌ Emotion parse error:', e.message);\n  console.error('Response:', response.substring(0, 200));\n  \n  // Fallback: try to extract JSON from text\n  const jsonMatch = response.match(/\\{[\\s\\S]*?\\}/);\n  if (jsonMatch) {\n    try {\n      emotions = JSON.parse(jsonMatch[0]);\n    } catch (e2) {\n      console.error('Fallback parse failed:', e2.message);\n      \n      // Hard fallback\n      emotions = {\n        overall_tone: \"neutral\",\n        tone_intensity: 0.5,\n        atmosphere: \"Обычный диалог\"\n      };\n    }\n  } else {\n    // Hard fallback if no JSON found\n    emotions = {\n      overall_tone: \"neutral\",\n      tone_intensity: 0.5,\n      atmosphere: \"Обычный диалог\"\n    };\n  }\n}\n\n// Ensure required fields based on detail level\nif (detailLevel === \"micro\" && !emotions.tone) {\n  emotions.tone = \"нейтральный 😐\";\n}\n\nif (detailLevel !== \"micro\" && !emotions.overall_tone) {\n  emotions.overall_tone = \"neutral\";\n  emotions.tone_intensity = 0.5;\n  emotions.atmosphere = \"Обычный диалог\";\n}\n\n// Return emotions\nreturn [\n  {\n    json: {\n      emotions: emotions\n    }\n  }\n];"
+      },
+      "id": "parse-emotions",
+      "name": "Parse Emotions",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850, 300]
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Prepare Emotion Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Emotion Prompt": {
+      "main": [
+        [
+          {
+            "node": "GigaChat: Analyze Emotions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GigaChat: Analyze Emotions": {
+      "main": [
+        [
+          {
+            "node": "Parse Emotions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "updatedAt": "2025-10-14T20:00:00.000Z",
+  "versionId": "1"
+}

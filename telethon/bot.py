@@ -324,7 +324,7 @@ class TelegramBot:
 /login INVITE_CODE
 
 **Пример:**
-`/login ABC123XYZ`
+<code>/login ABC123XYZ</code>
 
 ✨ **Процесс авторизации:**
 1️⃣ Отправьте /login с вашим кодом
@@ -587,8 +587,8 @@ class TelegramBot:
             await update.message.reply_text(
                 "✅ Вы успешно вышли из системы.\n\n"
                 "Для повторного использования:\n"
-                "• `/login INVITE_CODE` - QR авторизация\n"
-                "• `/auth` - Веб-форма (свои API ключи)"
+                "• <code>/login INVITE_CODE</code> - QR авторизация\n"
+                "• <code>/auth</code> - Веб-форма (свои API ключи)"
             )
             
         except Exception as e:
@@ -862,7 +862,7 @@ class TelegramBot:
                 if not user_groups:
                     await update.message.reply_text(
                         "📭 Вы не состоите ни в одной группе\n\n"
-                        "Добавьте группу по ID: `/add_group -1001234567890`"
+                        "Добавьте группу по ID: <code>/add_group -1001234567890</code>"
                     )
                     return
                 
@@ -874,7 +874,7 @@ class TelegramBot:
                     # Экранируем спецсимволы Markdown в названии
                     safe_title = g['title'].replace('_', '\\_').replace('*', '\\*').replace('[', '\\[').replace('`', '\\`')
                     text += f"{i}. **{safe_title}**\n"
-                    text += f"   `/add_group {g['id']}`\n\n"
+                    text += f"   <code>/add_group {g['id']}</code>\n\n"
                 
                 if len(user_groups) > 20:
                     text += f"... и еще {len(user_groups) - 20} групп\n\n"
@@ -927,7 +927,7 @@ class TelegramBot:
                             f"Возможные причины:\n"
                             f"• Вы не состоите в этой группе\n"
                             f"• ID группы неверный\n\n"
-                            f"💡 Используйте `/add_group` без параметров чтобы увидеть список ваших групп"
+                            f"💡 Используйте <code>/add_group</code> без параметров чтобы увидеть список ваших групп"
                         )
                         return
             
@@ -964,7 +964,7 @@ class TelegramBot:
                         await update.message.reply_text(
                             "📭 Вы не состоите ни в одной группе\n\n"
                             "💡 Сначала вступите в группу через invite link в Telegram,\n"
-                            "затем используйте `/add_group` для выбора из списка"
+                            "затем используйте <code>/add_group</code> для выбора из списка"
                         )
                         return
                     
@@ -976,7 +976,7 @@ class TelegramBot:
                         # Экранируем спецсимволы Markdown
                         safe_title = g.title.replace('_', '\\_').replace('*', '\\*').replace('[', '\\[').replace('`', '\\`')
                         text += f"{i}. **{safe_title}**\n"
-                        text += f"   `/add_group {g.id}`\n\n"
+                        text += f"   <code>/add_group {g.id}</code>\n\n"
                     
                     if len(found_groups) > 20:
                         text += f"... и еще {len(found_groups) - 20} групп\n\n"
@@ -999,7 +999,7 @@ class TelegramBot:
                     except Exception as e:
                         await update.message.reply_text(
                             f"❌ Не удалось найти группу: {str(e)}\n\n"
-                            f"💡 Для приватных групп используйте `/add_group` без параметров"
+                            f"💡 Для приватных групп используйте <code>/add_group</code> без параметров"
                         )
                         return
             else:
@@ -1017,7 +1017,7 @@ class TelegramBot:
                 except Exception as e:
                     await update.message.reply_text(
                         f"❌ Не удалось получить информацию о группе\n\n"
-                        f"Используйте `/add_group` без параметров для выбора из списка"
+                        f"Используйте <code>/add_group</code> без параметров для выбора из списка"
                     )
                     return
             
@@ -1085,7 +1085,7 @@ class TelegramBot:
             await update.message.reply_text(
                 f"❌ Ошибка: {str(e)}\n\n"
                 "💡 Для приватных групп:\n"
-                "1. Используйте `/add_group` без параметров\n"
+                "1. Используйте <code>/add_group</code> без параметров\n"
                 "2. Выберите группу из списка\n"
                 "3. Скопируйте команду с ID"
             )
@@ -1151,11 +1151,39 @@ class TelegramBot:
                 text += f"{i}. {status} **{display_name}**\n"
                 text += f"   {mentions} Упоминания | ID: `{group.group_id}`\n"
             
-            text += f"\n💡 Используйте /group_settings для настройки уведомлений"
+            # Add inline keyboard with quick actions
+            keyboard = []
+            for group in groups:
+                display = group.group_title or str(group.group_id)
+                if len(display) > 25:
+                    display = display[:22] + "..."
+                logger.info(f"🔍 Кнопка: '{display}' → group_id={group.id}, group_title='{group.group_title}', tg_group_id={group.group_id}")
+                keyboard.append([
+                    InlineKeyboardButton(
+                        f"📊 {display}",
+                        callback_data=f"groupdigest_select_{group.id}"
+                    )
+                ])
+            
+            # Add settings button at the bottom
+            keyboard.append([
+                InlineKeyboardButton(
+                    "⚙️ Настройки уведомлений",
+                    callback_data="group_settings_open"
+                )
+            ])
+            
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            text += f"\n\n💡 Нажмите на группу для быстрого дайджеста"
             
             # Конвертируем через telegramify-markdown для безопасного экранирования
             safe_text = markdownify(text)
-            await update.message.reply_text(safe_text, parse_mode='HTML')
+            await update.message.reply_text(
+                safe_text, 
+                reply_markup=reply_markup,
+                parse_mode='HTML'
+            )
             
         except Exception as e:
             await update.message.reply_text(
@@ -1208,130 +1236,208 @@ class TelegramBot:
                 )
                 return
             
-            # Парсим аргументы
-            hours = 24
-            target_group = None
-            
-            if len(args) == 1:
-                # /group_digest 24
-                if args[0].isdigit():
-                    hours = int(args[0])
-                else:
-                    # /group_digest group_name - пока не поддерживаем
-                    await update.message.reply_text(
-                        "💡 Укажите количество часов: `/group_digest 24`",
-                        parse_mode='HTML'
-                    )
-                    return
-            elif len(args) == 2:
-                # /group_digest group_name 24 - будущая функция
-                pass
-            
-            # Если у пользователя одна группа - используем её
+            # Если у пользователя одна группа - показываем выбор периода
             if len(groups) == 1:
-                target_group = groups[0]
+                await self._show_digest_period_selection(update, groups[0], edit=False)
             else:
-                # Если несколько групп - показываем список для выбора
-                text = "📊 Выберите группу для дайджеста:\n\n"
-                for i, group in enumerate(groups, 1):
+                # Несколько групп - показываем inline keyboard для выбора
+                keyboard = []
+                for group in groups:
                     display = group.group_title or str(group.group_id)
-                    safe_display = display.replace('_', '\\_').replace('*', '\\*').replace('[', '\\[').replace('`', '\\`')
-                    text += f"{i}. {safe_display}\n"
-                text += f"\nИспользуйте: `/group_digest <номер> <часы>`"
+                    # Truncate long names for better display
+                    if len(display) > 30:
+                        display = display[:27] + "..."
+                    keyboard.append([
+                        InlineKeyboardButton(
+                            f"📊 {display}",
+                            callback_data=f"groupdigest_select_{group.id}"
+                        )
+                    ])
                 
-                await update.message.reply_text(text, parse_mode='HTML')
-                return
-            
-            # Генерируем дайджест
-            safe_group_title = (target_group.group_title or str(target_group.group_id)).replace('_', '\\_').replace('*', '\\*').replace('[', '\\[').replace('`', '\\`')
-            await update.message.reply_text(
-                f"⏳ Генерация дайджеста для группы **{safe_group_title}**...\n"
-                f"Период: {hours} часов\n\n"
-                "Это может занять 20-30 секунд ⏰",
-                parse_mode='HTML'
-            )
-            
-            # Получаем клиент
-            from shared_auth_manager import shared_auth_manager
-            client = await shared_auth_manager.get_user_client(user.id)
-            
-            if not client:
+                reply_markup = InlineKeyboardMarkup(keyboard)
                 await update.message.reply_text(
-                    markdownify("❌ Не удалось подключиться к Telegram"),
+                    "📊 Выберите группу для дайджеста:",
+                    reply_markup=reply_markup,
                     parse_mode='HTML'
-                )
-                return
-            
-            # Получаем сообщения из группы
-            from datetime import timedelta
-            date_from = datetime.now(timezone.utc) - timedelta(hours=hours)
-            
-            logger.info(f"📨 Получение сообщений из группы {target_group.group_id}")
-            logger.info(f"   Период: с {date_from} до {datetime.now(timezone.utc)}")
-            logger.info(f"   Часов: {hours}")
-            
-            messages = []
-            total_fetched = 0
-            async for msg in client.iter_messages(
-                target_group.group_id,
-                limit=200,  # Лимит сообщений
-                offset_date=datetime.now(timezone.utc)
-            ):
-                total_fetched += 1
-                
-                # Конвертируем msg.date в timezone-aware если нужно
-                msg_date = msg.date
-                if msg_date.tzinfo is None:
-                    msg_date = msg_date.replace(tzinfo=timezone.utc)
-                else:
-                    msg_date = msg_date.astimezone(timezone.utc)
-                
-                if msg_date < date_from:
-                    break
-                    
-                if msg.text:  # Только текстовые сообщения
-                    messages.append(msg)
-            
-            logger.info(f"📊 Получено сообщений: {total_fetched} всего, {len(messages)} с текстом")
-            
-            if not messages:
-                await update.message.reply_text(
-                    f"📭 За последние {hours} часов в группе нет текстовых сообщений\n\n"
-                    f"Проверено сообщений: {total_fetched}"
-                )
-                return
-            
-            # Генерируем дайджест через n8n workflow
-            from group_digest_generator import group_digest_generator
-            
-            try:
-                digest = await group_digest_generator.generate_digest(
-                    user_id=db_user.id,
-                    group_id=target_group.id,
-                    messages=messages,
-                    hours=hours
-                )
-                
-                # Форматируем для Telegram
-                formatted = group_digest_generator.format_digest_for_telegram(
-                    digest=digest,
-                    group_title=target_group.group_title or str(target_group.group_id)
-                )
-                
-                # Отправляем результат
-                await update.message.reply_text(formatted, parse_mode='HTML')
-                
-            except Exception as e:
-                logger.error(f"❌ Ошибка генерации дайджеста: {e}")
-                await update.message.reply_text(
-                    f"❌ Ошибка генерации дайджеста: {str(e)}\n\n"
-                    "Проверьте:\n"
-                    "• n8n workflows импортированы и активны\n"
-                    "• gpt2giga-proxy доступен"
                 )
                 
         finally:
             db.close()
+    
+    async def _show_digest_period_selection(
+        self, 
+        update_or_query, 
+        group,
+        edit: bool = False
+    ):
+        """Show time period selection keyboard"""
+        from models import Group
+        display_name = group.group_title or str(group.group_id)
+        
+        keyboard = [
+            [
+                InlineKeyboardButton("⏰ 2 часа", callback_data=f"groupdigest_gen_{group.id}_2"),
+                InlineKeyboardButton("⏰ 8 часов", callback_data=f"groupdigest_gen_{group.id}_8"),
+            ],
+            [
+                InlineKeyboardButton("⏰ 12 часов", callback_data=f"groupdigest_gen_{group.id}_12"),
+                InlineKeyboardButton("⏰ 24 часа", callback_data=f"groupdigest_gen_{group.id}_24"),
+            ],
+            [
+                InlineKeyboardButton("← Назад к группам", callback_data="groupdigest_back")
+            ]
+        ]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        text = f"⏰ Выберите период для группы <b>{display_name}</b>:"
+        
+        if edit:
+            # Called from callback - edit existing message
+            await update_or_query.edit_message_text(
+                text,
+                reply_markup=reply_markup,
+                parse_mode='HTML'
+            )
+        else:
+            # Called from command - send new message
+            await update_or_query.message.reply_text(
+                text,
+                reply_markup=reply_markup,
+                parse_mode='HTML'
+            )
+    
+    async def _format_group_digest(
+        self, 
+        digest: dict, 
+        group_title: str
+    ) -> str:
+        """Format digest result for Telegram"""
+        from group_digest_generator import group_digest_generator
+        return group_digest_generator.format_digest_for_telegram(
+            digest=digest,
+            group_title=group_title
+        )
+    
+    async def _generate_and_send_digest(
+        self,
+        query_or_update,
+        context: ContextTypes.DEFAULT_TYPE,
+        db_user: User,
+        group,
+        hours: int
+    ):
+        """Generate and send group digest (reusable logic)"""
+        from shared_auth_manager import shared_auth_manager
+        from datetime import timedelta
+        from group_digest_generator import group_digest_generator
+        from models import Group
+        
+        # Get user client
+        user_id = db_user.telegram_id
+        client = await shared_auth_manager.get_user_client(user_id)
+        
+        if not client:
+            if hasattr(query_or_update, 'edit_message_text'):
+                await query_or_update.edit_message_text("❌ Не удалось подключиться к Telegram")
+            else:
+                await query_or_update.message.reply_text("❌ Не удалось подключиться к Telegram")
+            return
+        
+        # Fetch messages
+        date_from = datetime.now(timezone.utc) - timedelta(hours=hours)
+        
+        logger.info(f"📨 Получение сообщений из группы {group.group_id}")
+        logger.info(f"   Период: с {date_from} до {datetime.now(timezone.utc)}")
+        logger.info(f"   Часов: {hours}")
+        
+        messages = []
+        total_fetched = 0
+        
+        async for msg in client.iter_messages(
+            group.group_id,
+            limit=200,
+            offset_date=datetime.now(timezone.utc)
+        ):
+            total_fetched += 1
+            
+            msg_date = msg.date
+            if msg_date.tzinfo is None:
+                msg_date = msg_date.replace(tzinfo=timezone.utc)
+            else:
+                msg_date = msg_date.astimezone(timezone.utc)
+            
+            if msg_date < date_from:
+                break
+            
+            if msg.text:
+                messages.append(msg)
+        
+        logger.info(f"📊 Получено сообщений: {total_fetched} всего, {len(messages)} с текстом")
+        
+        if not messages:
+            error_text = (
+                f"📭 За последние {hours} часов в группе нет текстовых сообщений\n\n"
+                f"Проверено сообщений: {total_fetched}"
+            )
+            if hasattr(query_or_update, 'edit_message_text'):
+                await query_or_update.edit_message_text(error_text, parse_mode='HTML')
+            else:
+                await query_or_update.message.reply_text(error_text, parse_mode='HTML')
+            return
+        
+        # Generate digest via n8n
+        try:
+            digest = await group_digest_generator.generate_digest(
+                user_id=db_user.id,
+                group_id=group.id,
+                messages=messages,
+                hours=hours
+            )
+            
+            # Format digest
+            formatted = await self._format_group_digest(
+                digest,
+                group.group_title or str(group.group_id)
+            )
+            
+            # Send result
+            if hasattr(query_or_update, 'edit_message_text'):
+                # Delete loading message and send new one (callbacks can't handle long messages)
+                try:
+                    await query_or_update.delete_message()
+                except Exception as del_err:
+                    logger.warning(f"⚠️ Couldn't delete loading message: {del_err}")
+                
+                chat_id = query_or_update.message.chat.id
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=formatted,
+                    parse_mode='HTML'
+                )
+            else:
+                await query_or_update.message.reply_text(formatted, parse_mode='HTML')
+                
+        except Exception as e:
+            logger.error(f"❌ Digest generation error: {e}", exc_info=True)
+            error_text = (
+                f"❌ Ошибка генерации дайджеста: {str(e)}\n\n"
+                "Проверьте:\n"
+                "• n8n workflows импортированы и активны\n"
+                "• gpt2giga-proxy доступен"
+            )
+            try:
+                if hasattr(query_or_update, 'edit_message_text'):
+                    await query_or_update.edit_message_text(error_text, parse_mode='HTML')
+                else:
+                    await query_or_update.message.reply_text(error_text, parse_mode='HTML')
+            except Exception as msg_err:
+                logger.warning(f"⚠️ Couldn't send error message: {msg_err}")
+                # Try to send new message
+                try:
+                    chat_id = query_or_update.message.chat.id if hasattr(query_or_update, 'message') else query_or_update.effective_chat.id
+                    await context.bot.send_message(chat_id=chat_id, text=error_text, parse_mode='HTML')
+                except:
+                    logger.error("❌ Failed to send error message at all")
     
     async def group_settings_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Настройки уведомлений для групп"""
@@ -1372,9 +1478,9 @@ class TelegramBot:
             text += f"⏰ Период дайджестов по умолчанию: {settings.digest_default_hours} часов\n"
             text += f"📊 Макс. сообщений для анализа: {settings.digest_max_messages}\n\n"
             text += "💡 Для изменения настроек используйте команды:\n"
-            text += "• `/group_settings mentions on|off` - вкл/выкл уведомления\n"
-            text += "• `/group_settings context <N>` - количество сообщений контекста\n"
-            text += "• `/group_settings digest_hours <N>` - период по умолчанию"
+            text += "• <code>/group_settings mentions on|off</code> - вкл/выкл уведомления\n"
+            text += "• <code>/group_settings context &lt;N&gt;</code> - количество сообщений контекста\n"
+            text += "• <code>/group_settings digest_hours &lt;N&gt;</code> - период по умолчанию"
             
             # Обработка аргументов для изменения настроек
             args = context.args
@@ -1428,6 +1534,15 @@ class TelegramBot:
             logger.info(f"  → Обработка remove_channel: {query.data}")
             channel_id = int(query.data.split("_")[1])
             await self.remove_channel_by_id(query, channel_id)
+        elif query.data.startswith("groupdigest_"):
+            logger.info(f"  → Обработка groupdigest callback: {query.data}")
+            await self.handle_groupdigest_callback(query, context)
+        elif query.data == "group_settings_open":
+            logger.info(f"  → Обработка group_settings_open callback")
+            await query.edit_message_text(
+                "⚙️ Используйте команду <code>/group_settings</code> для настройки уведомлений",
+                parse_mode='HTML'
+            )
         elif query.data.startswith("voice_ask:"):
             logger.info(f"  → Обработка voice_ask callback")
             await self.handle_voice_ask_callback(query, context)
@@ -1442,6 +1557,117 @@ class TelegramBot:
             await self.handle_search_callback(query, context)
         else:
             logger.warning(f"  → Неизвестный callback: {query.data}")
+    
+    async def handle_groupdigest_callback(
+        self, 
+        query, 
+        context: ContextTypes.DEFAULT_TYPE
+    ):
+        """Handle group digest inline keyboard callbacks"""
+        user = query.from_user
+        data = query.data
+        db = SessionLocal()
+        
+        try:
+            db_user = db.query(User).filter(User.telegram_id == user.id).first()
+            if not db_user:
+                await query.edit_message_text("❌ Пользователь не найден")
+                return
+            
+            from models import Group
+            
+            if data == "groupdigest_back":
+                # Back to group selection
+                groups = db.query(Group).join(
+                    user_group,
+                    Group.id == user_group.c.group_id
+                ).filter(
+                    user_group.c.user_id == db_user.id,
+                    user_group.c.is_active == True
+                ).all()
+                
+                if not groups:
+                    await query.edit_message_text(
+                        "📭 У вас нет активных групп\n\n"
+                        "Добавьте группу: /add_group <ссылка>",
+                        parse_mode='HTML'
+                    )
+                    return
+                
+                keyboard = []
+                for group in groups:
+                    display = group.group_title or str(group.group_id)
+                    if len(display) > 30:
+                        display = display[:27] + "..."
+                    keyboard.append([
+                        InlineKeyboardButton(
+                            f"📊 {display}",
+                            callback_data=f"groupdigest_select_{group.id}"
+                        )
+                    ])
+                
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await query.edit_message_text(
+                    "📊 Выберите группу для дайджеста:",
+                    reply_markup=reply_markup,
+                    parse_mode='HTML'
+                )
+                
+            elif data.startswith("groupdigest_select_"):
+                # Group selected - show period selection
+                group_id = int(data.split("_")[2])
+                logger.info(f"🔍 Выбрана группа: group_id={group_id}")
+                group = db.query(Group).filter(Group.id == group_id).first()
+                
+                if not group:
+                    await query.edit_message_text("❌ Группа не найдена")
+                    return
+                
+                logger.info(f"🔍 Загружена группа из БД: id={group.id}, title='{group.group_title}', tg_group_id={group.group_id}")
+                await self._show_digest_period_selection(query, group, edit=True)
+                
+            elif data.startswith("groupdigest_gen_"):
+                # Generate digest
+                parts = data.split("_")
+                group_id = int(parts[2])
+                hours = int(parts[3])
+                logger.info(f"🔍 Генерация дайджеста: group_id={group_id}, hours={hours}")
+                
+                group = db.query(Group).filter(Group.id == group_id).first()
+                if not group:
+                    await query.edit_message_text("❌ Группа не найдена")
+                    return
+                
+                logger.info(f"🔍 Будет генерироваться для: id={group.id}, title='{group.group_title}', tg_group_id={group.group_id}")
+                
+                # Show loading message
+                safe_title = group.group_title or str(group.group_id)
+                await query.edit_message_text(
+                    f"⏳ Генерация дайджеста...\n"
+                    f"Группа: <b>{safe_title}</b>\n"
+                    f"Период: {hours} часов\n\n"
+                    f"Это может занять 20-30 секунд ⏰",
+                    parse_mode='HTML'
+                )
+                
+                # Generate digest - reuse existing logic
+                await self._generate_and_send_digest(
+                    query, 
+                    context, 
+                    db_user, 
+                    group, 
+                    hours
+                )
+                
+        except Exception as e:
+            logger.error(f"❌ Error in groupdigest callback: {e}", exc_info=True)
+            try:
+                await query.edit_message_text(f"❌ Ошибка: {str(e)}")
+            except:
+                # If message can't be edited, try to send a new one
+                await query.message.reply_text(f"❌ Ошибка: {str(e)}")
+        finally:
+            db.close()
     
     async def remove_channel_by_id(self, query, channel_id: int):
         """Удаление канала (отписка пользователя от канала)"""
@@ -1637,13 +1863,13 @@ class TelegramBot:
         
         if not args:
             await update.message.reply_text(
-                "💡 **Использование:** `/ask <ваш вопрос>`\n\n"
+                "💡 **Использование:** <code>/ask &lt;ваш вопрос&gt;</code>\n\n"
                 "**Примеры:**\n"
-                "• `/ask Что писали про нейросети на этой неделе?`\n"
-                "• `/ask Какие новости про Tesla?`\n"
-                "• `/ask Расскажи о блокчейн технологиях`\n\n"
+                "• <code>/ask Что писали про нейросети на этой неделе?</code>\n"
+                "• <code>/ask Какие новости про Tesla?</code>\n"
+                "• <code>/ask Расскажи о блокчейн технологиях</code>\n\n"
                 "🎤 **Голосовой ввод (Premium/Enterprise):**\n"
-                "1️⃣ Отправьте эту команду `/ask`\n"
+                "1️⃣ Отправьте эту команду <code>/ask</code>\n"
                 "2️⃣ Отправьте голосовое с вопросом\n"
                 "   → Автоматически выполнится поиск!\n\n"
                 "💡 **Альтернатива:**\n"
@@ -1677,7 +1903,7 @@ class TelegramBot:
             if posts_count == 0:
                 await update.message.reply_text(
                     "📭 У вас пока нет постов в базе данных.\n\n"
-                    "💡 Добавьте каналы командой `/add_channel @channel_name`\n"
+                    "💡 Добавьте каналы командой <code>/add_channel @channel_name</code>\n"
                     "Парсинг начнется автоматически через несколько минут.",
                     parse_mode='HTML'
                 )
@@ -1800,11 +2026,11 @@ class TelegramBot:
             if not recommendations:
                 await update.message.reply_text(
                     "💡 **Недостаточно данных для рекомендаций**\n\n"
-                    "Используйте команду `/ask` для поиска информации.\n"
+                    "Используйте команду <code>/ask</code> для поиска информации.\n"
                     "Система проанализирует ваши интересы и начнет давать персональные рекомендации.\n\n"
                     "**Пример:**\n"
-                    "• `/ask Что нового в AI?`\n"
-                    "• `/ask Расскажи про блокчейн`",
+                    "• <code>/ask Что нового в AI?</code>\n"
+                    "• <code>/ask Расскажи про блокчейн</code>",
                     parse_mode='HTML'
                 )
                 return
@@ -1854,14 +2080,14 @@ class TelegramBot:
         
         if not args:
             await update.message.reply_text(
-                "🔍 **Использование:** `/search <запрос>`\n\n"
+                "🔍 **Использование:** <code>/search &lt;запрос&gt;</code>\n\n"
                 "**Примеры:**\n"
-                "• `/search квантовые компьютеры`\n"
-                "• `/search искусственный интеллект`\n"
-                "• `/search блокчейн технологии`\n\n"
+                "• <code>/search квантовые компьютеры</code>\n"
+                "• <code>/search искусственный интеллект</code>\n"
+                "• <code>/search блокчейн технологии</code>\n\n"
                 "Поиск осуществляется в ваших постах + в интернете через Searxng\n\n"
                 "🎤 **Голосовой ввод (Premium/Enterprise):**\n"
-                "1️⃣ Отправьте эту команду `/search`\n"
+                "1️⃣ Отправьте эту команду <code>/search</code>\n"
                 "2️⃣ Отправьте голосовое с запросом\n"
                 "   → Автоматически выполнится поиск!\n\n"
                 "💡 **Альтернатива:**\n"
@@ -2793,8 +3019,8 @@ class TelegramBot:
                     "🏷️ **Введите ваши предпочитаемые темы**\n\n"
                     "Отправьте темы через запятую.\n\n"
                     "**Пример:**\n"
-                    "`AI, блокчейн, стартапы, технологии`\n\n"
-                    "Или отправьте `/cancel` для отмены",
+                    "<code>AI, блокчейн, стартапы, технологии</code>\n\n"
+                    "Или отправьте <code>/cancel</code> для отмены",
                     parse_mode='HTML'
                 )
             
@@ -3156,7 +3382,7 @@ class TelegramBot:
                 "• Блокировка снята\n"
                 "• Счетчик попыток сброшен\n"
                 "• Ошибки очищены\n\n"
-                "Теперь можете попробовать `/login` снова",
+                "Теперь можете попробовать <code>/login</code> снова",
                 parse_mode='HTML'
             )
             
@@ -3209,7 +3435,7 @@ class TelegramBot:
                 "• Блокировки\n"
                 "• Session файл\n"
                 "• Счетчики попыток\n\n"
-                "🔄 Используйте `/login INVITE_CODE` для новой попытки",
+                "🔄 Используйте <code>/login INVITE_CODE</code> для новой попытки",
                 parse_mode='HTML'
             )
             

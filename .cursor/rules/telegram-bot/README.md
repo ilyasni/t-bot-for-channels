@@ -1,7 +1,7 @@
 # Telegram Bot Cursor Rules
 
-**Version:** 3.3.0 ⭐  
-**Last Updated:** 13 октября 2025  
+**Version:** 3.4.0 ⭐  
+**Last Updated:** 15 октября 2025  
 **Changelog:** См. [CHANGELOG.mdc](./CHANGELOG.mdc)  
 **Lines:** Optimized to < 550 per module (target: 500)
 
@@ -22,7 +22,7 @@
 
 ## 🗂️ Структура модулей
 
-Правила разделены на **10 логических модулей** согласно [Cursor Best Practices](https://docs.cursor.com/context/rules) (< 550 строк каждый):
+Правила разделены на **11 логических модулей** согласно [Cursor Best Practices](https://docs.cursor.com/context/rules) (< 550 строк каждый):
 
 ### Core Modules
 
@@ -42,7 +42,8 @@
 | **07-rag.mdc** | RAG, vector search, embeddings, AI | 543 | 🟡 Medium | autoAttached | `telethon/rag_service/**` |
 | **08-api.mdc** | FastAPI endpoints, rate limiting | 525 | 🟡 Medium | autoAttached | `telethon/main.py`, `api_*.py` |
 | **09-external.mdc** | External services (Qdrant, Crawl4AI) | 424 | 🟢 Low | autoAttached | `telethon/integrations/**` |
-| **10-groups.mdc** | 🆕 Groups дайджесты, упоминания, n8n | 480 | 🟡 Medium | autoAttached | `telethon/*group*.py`, `n8n/workflows/group*.json` |
+| **10-groups.mdc** | Groups дайджесты, упоминания, n8n | 480 | 🟡 Medium | autoAttached | `telethon/*group*.py`, `n8n/workflows/group*.json` |
+| **11-maintenance.mdc** | 🆕 Unified retention service, cleanup | 450 | 🟡 Medium | autoAttached | `telethon/maintenance/**` |
 
 **Special Files:**
 

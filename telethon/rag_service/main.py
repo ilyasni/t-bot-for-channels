@@ -12,6 +12,7 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.responses import JSONResponse
 from typing import Optional
 from pydantic import BaseModel
+from datetime import datetime, timezone
 
 # Prometheus metrics
 from prometheus_client import make_asgi_app
@@ -82,7 +83,7 @@ async def startup_event():
             
             logger.info(f"📅 Найдено {len(active_settings)} активных расписаний дайджестов")
             
-            for settings in active_settings:
+            for idx, settings in enumerate(active_settings):
                 try:
                     # Конвертируем frequency в days_of_week
                     if settings.frequency == "daily":
@@ -93,9 +94,25 @@ async def startup_event():
                     else:
                         days_of_week = "mon-sun"
                     
+                    # Staggering: сдвиг времени на 5 минут для каждого пользователя
+                    # Избегаем одновременных дайджестов → Rate Limit
+                    base_time = settings.time  # "09:00"
+                    hour, minute = map(int, base_time.split(":"))
+                    
+                    # Добавляем idx * 5 минут
+                    minute += idx * 5
+                    if minute >= 60:
+                        hour += minute // 60
+                        minute = minute % 60
+                    
+                    staggered_time = f"{hour:02d}:{minute:02d}"
+                    
+                    if idx > 0:  # Логируем только для сдвинутых пользователей
+                        logger.info(f"📅 User {settings.user_id}: {base_time} → {staggered_time} (stagger +{idx*5}m)")
+                    
                     await digest_scheduler.schedule_digest(
                         user_id=settings.user_id,
-                        time=settings.time,
+                        time=staggered_time,  # ← Сдвинутое время
                         days_of_week=days_of_week,
                         timezone=settings.timezone
                     )
@@ -106,6 +123,37 @@ async def startup_event():
             
     except Exception as e:
         logger.error(f"❌ Ошибка запуска планировщика дайджестов: {e}")
+    
+    # Запуск cleanup scheduler для накопленных постов
+    try:
+        from cleanup_service import cleanup_service
+        from apscheduler.schedulers.asyncio import AsyncIOScheduler
+        
+        cleanup_scheduler = AsyncIOScheduler()
+        
+        # Каждые 2 часа обрабатываем накопленные посты без тегов
+        cleanup_scheduler.add_job(
+            cleanup_service.process_untagged_posts,
+            'interval',
+            hours=2,
+            id='cleanup_untagged',
+            kwargs={'limit': 50}
+        )
+        
+        # Каждые 2 часа обрабатываем посты без индексации
+        cleanup_scheduler.add_job(
+            cleanup_service.process_unindexed_posts,
+            'interval',
+            hours=2,
+            id='cleanup_unindexed',
+            kwargs={'limit': 50}
+        )
+        
+        cleanup_scheduler.start()
+        logger.info("✅ Cleanup scheduler запущен (каждые 2 часа)")
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка запуска cleanup scheduler: {e}")
     
     logger.info("✅ RAG Service готов к работе")
 
@@ -937,6 +985,66 @@ async def send_digest_now(user_id: int):
     except Exception as e:
         logger.error(f"❌ Ошибка ручной отправки дайджеста: {e}")
         raise HTTPException(500, f"Ошибка отправки дайджеста: {str(e)}")
+
+
+# ============================================================================
+# Endpoints для cleanup накопленных постов
+# ============================================================================
+
+@app.post("/rag/cleanup/backlog")
+async def cleanup_backlog(background_tasks: BackgroundTasks):
+    """
+    Ручная очистка накопленных постов
+    
+    Запускает обработку:
+    - Постов без тегов (в статусе pending/failed)
+    - Постов без индексации в Qdrant
+    
+    Returns:
+        Статус запуска cleanup
+    """
+    try:
+        from cleanup_service import cleanup_service
+        
+        # Запускаем в фоне обработку накопленных постов
+        background_tasks.add_task(cleanup_service.process_untagged_posts, limit=100)
+        background_tasks.add_task(cleanup_service.process_unindexed_posts, limit=100)
+        
+        logger.info("🧹 Запущен manual cleanup накопленных постов")
+        
+        return {
+            "status": "queued",
+            "message": "Cleanup запущен в фоне (тегирование + индексация)",
+            "tasks": ["process_untagged_posts", "process_unindexed_posts"]
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка запуска cleanup: {e}")
+        raise HTTPException(500, f"Ошибка запуска cleanup: {str(e)}")
+
+
+@app.get("/rag/cleanup/stats")
+async def get_cleanup_stats():
+    """
+    Получить статистику накопленных постов
+    
+    Returns:
+        Статистика по постам без тегов/индексации
+    """
+    try:
+        from cleanup_service import cleanup_service
+        
+        stats = await cleanup_service.get_backlog_stats()
+        
+        return {
+            "status": "success",
+            "stats": stats,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения статистики cleanup: {e}")
+        raise HTTPException(500, f"Ошибка получения статистики: {str(e)}")
 
 
 @app.get("/rag/recommend/{user_id}")
