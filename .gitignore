@@ -11,6 +11,7 @@ searxng/settings.yml
 searxng/uwsgi*
 shared-backup/
 shared/
+.backups/
 supabase/
 gpt2giga/
 volumes/
