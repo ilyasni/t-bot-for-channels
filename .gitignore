@@ -1,8 +1,10 @@
 .DS_Store
 .env
+.env.*
 .env.bak
 .env.test
 **/.env
+**/.env.*
 **/.env.local
 neo4j/
 searxng/settings.yml
