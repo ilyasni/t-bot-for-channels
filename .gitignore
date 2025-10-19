@@ -64,4 +64,7 @@ log/
 *.db-wal
 
 # Node (возможные под-проекты)
-node_modules/docs/SERVICE_CREDENTIALS.md
+node_modules/
+
+# Security: Service credentials
+docs/SERVICE_CREDENTIALS.md
