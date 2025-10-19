@@ -1,0 +1,672 @@
+{
+  "name": "Group Digest Orchestrator V2 (Sequential + Adaptive)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "group-digest-v2",
+        "responseMode": "lastNode",
+        "options": {
+          "continueOnFail": true
+        }
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 500],
+      "webhookId": "group-digest-v2-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Prepare data for assessment\nconst items = $input.all();\nconst data = items[0].json.body || items[0].json;\n\nconst messages = data.messages || [];\nconst userId = data.user_id;\nconst groupId = data.group_id;\nconst hours = data.hours || 24;\nconst groupTitle = data.group_title || \"Группа\";\n\n// Format messages for agents\nconst messagesText = messages.map((msg, idx) => \n  `[${idx + 1}] ${msg.username}: ${msg.text}`\n).join('\\n\\n');\n\nconsole.log(`📋 Prepared data: ${messages.length} messages, ${hours}h period`);\n\n// Store original data in execution context for all agents\n$execution.customData.setAll({\n  original_messages: messages,\n  original_messages_text: messagesText,\n  group_title: groupTitle,\n  hours: hours,\n  user_id: userId,\n  group_id: groupId\n});\n\nreturn [\n  {\n    json: {\n      user_id: userId,\n      group_id: groupId,\n      group_title: groupTitle,\n      hours: hours,\n      messages: messages,\n      messages_text: messagesText\n    }\n  }\n];"
+      },
+      "id": "prepare-data",
+      "name": "Prepare Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 500]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {}
+        },
+        "options": {
+          "continueOnFail": true
+        }
+      },
+      "id": "exec-assessor",
+      "name": "1. Assessor",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [650, 500],
+      "notes": "Определяет detail_level и dialogue_type"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {}
+        },
+        "options": {
+          "continueOnFail": true
+        }
+      },
+      "id": "exec-topics",
+      "name": "2. Topics",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [850, 500],
+      "notes": "Получает assessment"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Validate Topics Agent Result\nconst items = $input.all();\nconst topicsResult = items[0].json;\nconst isValid = topicsResult.is_valid === true;\n\nif (!isValid) {\n  console.error('❌ Topics validation failed:', topicsResult.errors);\n  // Fallback to empty topics\n  return [{json: {\n    topics: []\n  }}];\n}\n\nconsole.log('✅ Topics validated successfully');\nreturn [{json: {\n  topics: topicsResult.validated_data\n}}];"
+      },
+      "id": "validate-topics",
+      "name": "Validate Topics",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [950, 500]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {}
+        },
+        "options": {
+          "continueOnFail": true
+        }
+      },
+      "id": "exec-emotions",
+      "name": "3. Emotions",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [1050, 500],
+      "notes": "Получает topics + assessment"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Validate Emotions Agent Result\nconst items = $input.all();\nconst emotionsResult = items[0].json;\nconst isValid = emotionsResult.is_valid === true;\n\nif (!isValid) {\n  console.error('❌ Emotions validation failed:', emotionsResult.errors);\n  // Fallback to default emotions\n  return [{json: {\n    emotions: {\n      overall_tone: \"neutral\",\n      tone_intensity: 0.5,\n      atmosphere: \"Обычный диалог\"\n    }\n  }}];\n}\n\nconsole.log('✅ Emotions validated successfully');\nreturn [{json: {\n  emotions: emotionsResult.validated_data\n}}];"
+      },
+      "id": "validate-emotions",
+      "name": "Validate Emotions",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1150, 500]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {}
+        },
+        "options": {
+          "continueOnFail": true
+        }
+      },
+      "id": "exec-speakers",
+      "name": "4. Speakers",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [1250, 500],
+      "notes": "Получает topics + emotions"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Validate Speakers Agent Result\nconst items = $input.all();\nconst speakersResult = items[0].json;\nconst isValid = speakersResult.is_valid === true;\n\nif (!isValid) {\n  console.error('❌ Speakers validation failed:', speakersResult.errors);\n  // Fallback to empty speakers\n  return [{json: {\n    speakers: {}\n  }}];\n}\n\nconsole.log('✅ Speakers validated successfully');\nconsole.log(`   Speakers count: ${Object.keys(speakersResult.validated_data).length}`);\nreturn [{json: {\n  speakers: speakersResult.validated_data\n}}];"
+      },
+      "id": "validate-speakers",
+      "name": "Validate Speakers",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1350, 500]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {}
+        },
+        "options": {
+          "continueOnFail": true
+        }
+      },
+      "id": "exec-summarizer",
+      "name": "5. Summarizer",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [1450, 500],
+      "notes": "Получает ALL previous"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $('1. Assessor').first().json.assessment.detail_level }}",
+              "operation": "notEqual",
+              "value2": "micro"
+            },
+            {
+              "value1": "={{ $('1. Assessor').first().json.assessment.detail_level }}",
+              "operation": "notEqual",
+              "value2": "minimal"
+            }
+          ]
+        },
+        "combineOperation": "all"
+      },
+      "id": "check-need-key-moments",
+      "name": "Need Key Moments?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1650, 500],
+      "notes": "Active if >= standard"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {}
+        },
+        "options": {
+          "continueOnFail": true
+        }
+      },
+      "id": "exec-key-moments",
+      "name": "6. Key Moments",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [1850, 400],
+      "notes": "Conditional: >= standard"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $('1. Assessor').first().json.assessment.detail_level }}",
+              "operation": "equal",
+              "value2": "detailed"
+            }
+          ],
+          "boolean": [
+            {
+              "value1": "={{ $('1. Assessor').first().json.assessment.detail_level === 'comprehensive' }}",
+              "value2": true
+            }
+          ]
+        },
+        "combineOperation": "any"
+      },
+      "id": "check-need-timeline",
+      "name": "Need Timeline?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [2050, 500],
+      "notes": "Active if >= detailed"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {}
+        },
+        "options": {
+          "continueOnFail": true
+        }
+      },
+      "id": "exec-timeline",
+      "name": "7. Timeline",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [2250, 400],
+      "notes": "Conditional: >= detailed"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $('1. Assessor').first().json.assessment.detail_level }}",
+              "operation": "equal",
+              "value2": "comprehensive"
+            }
+          ],
+          "boolean": [
+            {
+              "value1": "={{ $('1. Assessor').first().json.assessment.has_links }}",
+              "value2": true
+            }
+          ]
+        },
+        "combineOperation": "any"
+      },
+      "id": "check-need-context-links",
+      "name": "Need Context Links?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [2450, 500],
+      "notes": "Active if comprehensive OR has_links"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {}
+        },
+        "options": {
+          "continueOnFail": true
+        }
+      },
+      "id": "exec-context-links",
+      "name": "8. Context Links",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [2650, 400],
+      "notes": "Conditional: comprehensive or has_links"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Aggregate ALL results from sequential pipeline\nconst items = $input.all();\n\n// Get base data\nconst preparedData = $('Prepare Data').first().json;\n\n// Get assessment\nconst assessorResult = $('1. Assessor').first().json;\nconst assessment = assessorResult.assessment || {};\n\n// Get topics\nconst topicsResult = $('2. Topics').first().json;\nconst topics = topicsResult.topics || [];\n\n// Get emotions\nconst emotionsResult = $('3. Emotions').first().json;\nconst emotions = emotionsResult.emotions || {};\n\n// Get speakers\nconst speakersResult = $('4. Speakers').first().json;\nconst speakers = speakersResult.speakers || {};\n\n// Get summary\nconst summaryResult = $('5. Summarizer').first().json;\nconst summary = summaryResult.summary || \"\";\n\n// Get key moments (if available)\nlet keyMoments = [];\ntry {\n  const kmResult = $('6. Key Moments').first();\n  keyMoments = kmResult?.json?.key_moments || [];\n} catch (e) {\n  console.log('Key moments not available (level < standard)');\n}\n\n// Get timeline (if available)\nlet timeline = [];\nlet emotionalProgression = \"\";\ntry {\n  const tlResult = $('7. Timeline').first();\n  timeline = tlResult?.json?.timeline || [];\n  emotionalProgression = tlResult?.json?.emotional_progression || \"\";\n} catch (e) {\n  console.log('Timeline not available (level < detailed)');\n}\n\n// Get context links (if available)\nlet linkSummaries = [];\nlet externalContext = [];\ntry {\n  const ctxResult = $('8. Context Links').first();\n  linkSummaries = ctxResult?.json?.link_summaries || [];\n  externalContext = ctxResult?.json?.external_context || [];\n} catch (e) {\n  console.log('Context links not available');\n}\n\nconsole.log('📊 AGGREGATION COMPLETE:');\nconsole.log(`   Detail level: ${assessment.detail_level}`);\nconsole.log(`   Topics: ${topics.length}`);\nconsole.log(`   Speakers: ${Object.keys(speakers).length}`);\nconsole.log(`   Key moments: ${keyMoments.length}`);\nconsole.log(`   Timeline events: ${timeline.length}`);\nconsole.log(`   External links: ${linkSummaries.length}`);\n\n// Return aggregated data\nreturn [\n  {\n    json: {\n      // Metadata\n      group_title: preparedData.group_title,\n      hours: preparedData.hours,\n      \n      // Assessment\n      assessment: assessment,\n      \n      // Agent results\n      topics: topics,\n      emotions: emotions,\n      speakers: speakers,\n      summary: summary,\n      key_moments: keyMoments,\n      timeline: timeline,\n      emotional_progression: emotionalProgression,\n      link_summaries: linkSummaries,\n      external_context: externalContext\n    }\n  }\n];"
+      },
+      "id": "aggregate-all-results",
+      "name": "Aggregate All Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2850, 500]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {}
+        },
+        "options": {
+          "continueOnFail": true
+        }
+      },
+      "id": "exec-synthesizer",
+      "name": "9. Synthesizer",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [3050, 500],
+      "notes": "Final synthesis with all data"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Prepare final response\nconst items = $input.all();\nconst synthResult = items[0].json;\n\nconst digest = synthResult.digest || \"Дайджест недоступен\";\nconst assessment = $('1. Assessor').first().json.assessment || {};\nconst topics = $('2. Topics').first().json.topics || [];\nconst keyMoments = [];\ntry { keyMoments = $('6. Key Moments').first().json.key_moments || []; } catch(e) {}\n\nconst finalResponse = {\n  // Old format compatibility\n  topics: topics.map(t => t.name || t),\n  speakers_summary: $('4. Speakers').first().json.speakers || {},\n  overall_summary: $('5. Summarizer').first().json.summary || \"\",\n  message_count: assessment.message_count || 0,\n  period: `${$('Prepare Data').first().json.hours || 24} hours`,\n  \n  // V2 enhancements\n  detail_level: assessment.detail_level,\n  dialogue_type: assessment.dialogue_type,\n  emotions: $('3. Emotions').first().json.emotions || {},\n  key_moments: keyMoments,\n  \n  // Final synthesized digest\n  digest_html: digest\n};\n\nconsole.log('✅ Final response prepared');\nconsole.log(`   Detail level: ${finalResponse.detail_level}`);\nconsole.log(`   Digest length: ${digest.length} chars`);\n\nreturn [\n  {\n    json: finalResponse\n  }\n];"
+      },
+      "id": "prepare-response",
+      "name": "Prepare Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3250, 500]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      },
+      "id": "respond-webhook",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [3450, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Skip key moments for micro/minimal\nconst items = $input.all();\nreturn [\n  {\n    json: {\n      key_moments: []\n    }\n  }\n];"
+      },
+      "id": "skip-key-moments",
+      "name": "Skip Key Moments",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1850, 600]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Skip timeline for < detailed\nconst items = $input.all();\nreturn [\n  {\n    json: {\n      timeline: [],\n      emotional_progression: \"\"\n    }\n  }\n];"
+      },
+      "id": "skip-timeline",
+      "name": "Skip Timeline",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2250, 600]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Skip context links\nconst items = $input.all();\nreturn [\n  {\n    json: {\n      link_summaries: [],\n      external_context: []\n    }\n  }\n];"
+      },
+      "id": "skip-context-links",
+      "name": "Skip Context Links",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2650, 600]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Prepare Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Data": {
+      "main": [
+        [
+          {
+            "node": "1. Assessor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "1. Assessor": {
+      "main": [
+        [
+          {
+            "node": "2. Topics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "2. Topics": {
+      "main": [
+        [
+          {
+            "node": "Validate Topics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Topics": {
+      "main": [
+        [
+          {
+            "node": "3. Emotions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "3. Emotions": {
+      "main": [
+        [
+          {
+            "node": "Validate Emotions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Emotions": {
+      "main": [
+        [
+          {
+            "node": "4. Speakers",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "4. Speakers": {
+      "main": [
+        [
+          {
+            "node": "Validate Speakers",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Speakers": {
+      "main": [
+        [
+          {
+            "node": "5. Summarizer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "5. Summarizer": {
+      "main": [
+        [
+          {
+            "node": "Need Key Moments?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Need Key Moments?": {
+      "main": [
+        [
+          {
+            "node": "6. Key Moments",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Skip Key Moments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "6. Key Moments": {
+      "main": [
+        [
+          {
+            "node": "Need Timeline?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Skip Key Moments": {
+      "main": [
+        [
+          {
+            "node": "Need Timeline?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Need Timeline?": {
+      "main": [
+        [
+          {
+            "node": "7. Timeline",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Skip Timeline",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "7. Timeline": {
+      "main": [
+        [
+          {
+            "node": "Need Context Links?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Skip Timeline": {
+      "main": [
+        [
+          {
+            "node": "Need Context Links?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Need Context Links?": {
+      "main": [
+        [
+          {
+            "node": "8. Context Links",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Skip Context Links",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "8. Context Links": {
+      "main": [
+        [
+          {
+            "node": "Aggregate All Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Skip Context Links": {
+      "main": [
+        [
+          {
+            "node": "Aggregate All Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate All Results": {
+      "main": [
+        [
+          {
+            "node": "9. Synthesizer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "9. Synthesizer": {
+      "main": [
+        [
+          {
+            "node": "Prepare Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Response": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "updatedAt": "2025-10-14T19:30:00.000Z",
+  "versionId": "2"
+}
+

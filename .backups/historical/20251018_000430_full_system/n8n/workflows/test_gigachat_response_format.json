@@ -1,0 +1,92 @@
+{
+  "name": "Test: GigaChat Response Format",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "manual-trigger",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        250,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://gpt2giga-proxy:8090/v1/chat/completions",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\"model\": \"GigaChat\", \"response_format\": {\"type\": \"json_object\"}, \"messages\": [{\"role\": \"system\", \"content\": \"Return only valid JSON: {\\\"test\\\": true}\"}, {\"role\": \"user\", \"content\": \"Return test JSON\"}], \"temperature\": 0.0, \"max_tokens\": 50} }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "test-gigachat-response-format",
+      "name": "Test GigaChat Response Format",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        450,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Check Response Format Support\nconst response = $input.first().json.choices?.[0]?.message?.content || '{}';\nconst hasArtifacts = response.includes('```');\n\nconsole.log('Response format test:', {\n  hasArtifacts,\n  response: response.substring(0, 100)\n});\n\nreturn [{json: {\n  response_format_supported: !hasArtifacts,\n  raw_response: response,\n  has_markdown_fences: hasArtifacts\n}}];"
+      },
+      "id": "check-response",
+      "name": "Check Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        650,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Test GigaChat Response Format",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Test GigaChat Response Format": {
+      "main": [
+        [
+          {
+            "node": "Check Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "updatedAt": "2025-10-15T12:00:00.000Z",
+  "versionId": "1"
+}

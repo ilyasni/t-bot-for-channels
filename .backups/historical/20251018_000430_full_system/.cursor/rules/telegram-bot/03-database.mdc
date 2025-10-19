@@ -1,0 +1,433 @@
+---
+title: "Database Rules"
+description: "PostgreSQL, Redis, SQLAlchemy модели и миграции"
+tags: ["database", "postgresql", "redis", "models"]
+version: "3.1"
+---
+
+# Database Rules
+
+## 🎯 High-Level Overview
+
+**ТОЛЬКО PostgreSQL через Supabase!** Никакого SQLite fallback.
+
+**Stack:**
+- PostgreSQL 15 (primary database)
+- Redis/Valkey (cache + sessions)
+- SQLAlchemy ORM
+- Connection pooling через Supavisor
+
+## 🗄️ PostgreSQL Configuration
+
+### Database URL (критично!)
+
+```python
+# database.py
+import os
+from sqlalchemy import create_engine
+
+def get_database_url() -> str:
+    """
+    ВАЖНО: ТОЛЬКО PostgreSQL (Supabase)
+    НЕ используйте SQLite!
+    """
+    database_url = os.getenv("TELEGRAM_DATABASE_URL")
+    
+    if not database_url:
+        raise ValueError(
+            "TELEGRAM_DATABASE_URL не установлен!\n"
+            "Должен быть: postgresql://postgres:password@db:5432/postgres"
+        )
+    
+    if "sqlite" in database_url.lower():
+        raise ValueError(
+            "SQLite НЕ поддерживается!\n"
+            "Используйте только PostgreSQL (Supabase)"
+        )
+    
+    return database_url
+
+# Connection pooling
+engine = create_engine(
+    get_database_url(),
+    pool_size=20,
+    max_overflow=10,
+    pool_pre_ping=True,  # Проверка живых соединений
+    echo=False  # True для debug SQL
+)
+```
+
+### Environment Variables
+
+```bash
+# Prямое подключение (внутри Docker)
+TELEGRAM_DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/postgres
+
+# Через pooler (рекомендуется для production)
+TELEGRAM_DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@db:6543/postgres
+
+# Из хоста
+TELEGRAM_DATABASE_URL=postgresql://postgres:password@localhost:5432/postgres
+```
+
+## 📊 SQLAlchemy Models
+
+### Base Configuration
+
+```python
+# models.py
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy import Column, BigInteger, String, DateTime, Integer, Boolean
+from datetime import datetime, timezone
+
+Base = declarative_base()
+
+class BaseModel(Base):
+    """Базовая модель с общими полями"""
+    __abstract__ = True
+    
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc)
+    )
+```
+
+### User Model
+
+```python
+class User(Base):
+    __tablename__ = "users"
+    
+    id = Column(BigInteger, primary_key=True)
+    telegram_id = Column(BigInteger, unique=True, nullable=False)
+    username = Column(String, nullable=True)
+    
+    # Authentication
+    is_authenticated = Column(Boolean, default=False)
+    
+    # Roles & Subscription (v3.1)
+    role = Column(String, default="user")  # admin, user
+    subscription_type = Column(String, default="free")
+    subscription_expires = Column(DateTime(timezone=True), nullable=True)
+    max_channels = Column(Integer, default=3)
+    
+    # Invitations
+    invited_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    
+    # Timestamps
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), onupdate=lambda: datetime.now(timezone.utc))
+    
+    # Relationships
+    channels = relationship(
+        "Channel",
+        secondary="user_channel",
+        back_populates="users"
+    )
+    
+    def is_admin(self) -> bool:
+        return self.role == "admin"
+```
+
+### Invite Code Model
+
+```python
+class InviteCode(Base):
+    __tablename__ = "invite_codes"
+    
+    code = Column(String, primary_key=True)
+    created_by = Column(Integer, ForeignKey("users.id"))
+    
+    # Validity
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    max_uses = Column(Integer, default=1)
+    uses_count = Column(Integer, default=0)
+    
+    # Subscription settings
+    default_subscription = Column(String, default="free")
+    default_trial_days = Column(Integer, default=0)
+    
+    @staticmethod
+    def generate_code() -> str:
+        """Генерирует 12-символьный код"""
+        import random
+        import string
+        return ''.join(
+            random.choices(
+                string.ascii_uppercase + string.digits,
+                k=12
+            )
+        )
+    
+    def is_valid(self) -> bool:
+        now = datetime.now(timezone.utc)
+        return (
+            self.uses_count < self.max_uses and
+            self.expires_at > now
+        )
+```
+
+### Many-to-Many Relationships
+
+```python
+# Association table
+user_channel = Table(
+    'user_channel',
+    Base.metadata,
+    Column('user_id', BigInteger, ForeignKey('users.id')),
+    Column('channel_id', BigInteger, ForeignKey('channels.id')),
+    UniqueConstraint('user_id', 'channel_id')
+)
+
+class Channel(Base):
+    __tablename__ = "channels"
+    
+    id = Column(BigInteger, primary_key=True)
+    channel_username = Column(String, unique=True)
+    
+    # Relationships
+    users = relationship(
+        "User",
+        secondary="user_channel",
+        back_populates="channels"
+    )
+    posts = relationship("Post", back_populates="channel")
+```
+
+## ⏰ Timezone Handling (критично!)
+
+### ВСЕГДА Timezone-Aware
+
+```python
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+
+# ✅ Правильно - UTC в БД
+user.created_at = datetime.now(timezone.utc)
+invite.expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+
+# ✅ Сравнение с timezone check
+def is_expired(expires_at: datetime) -> bool:
+    # Ensure timezone-aware
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    
+    return datetime.now(timezone.utc) > expires_at
+
+# ✅ Для отображения пользователю
+LOCAL_TZ = ZoneInfo('Europe/Moscow')
+display_time = user.created_at.astimezone(LOCAL_TZ)
+formatted = display_time.strftime('%Y-%m-%d %H:%M:%S %Z')
+```
+
+### PostgreSQL Migrations
+
+```python
+# scripts/migrations/add_roles_and_subscriptions.py
+import psycopg2
+
+def migrate():
+    conn = psycopg2.connect(os.getenv("TELEGRAM_DATABASE_URL"))
+    cursor = conn.cursor()
+    
+    # TIMESTAMP для PostgreSQL (с timezone)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS invite_codes (
+            code VARCHAR PRIMARY KEY,
+            expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+            created_by INTEGER REFERENCES users(id),
+            ...
+        )
+    """)
+    
+    conn.commit()
+```
+
+## 🔴 Redis Configuration
+
+### Connection Setup
+
+```python
+# БЕЗ пароля (Valkey default)
+import redis
+import json
+
+redis_client = redis.Redis(
+    host=os.getenv("REDIS_HOST", "redis"),
+    port=int(os.getenv("REDIS_PORT", 6379)),
+    decode_responses=True  # Для работы с JSON
+)
+
+# Healthcheck
+try:
+    redis_client.ping()
+    print("✅ Redis подключен")
+except redis.ConnectionError:
+    print("❌ Redis недоступен")
+```
+
+### Use Cases
+
+```python
+# 1. QR Sessions (TTL 10 минут)
+redis_client.setex(
+    f"qr_session:{session_id}",
+    600,
+    json.dumps({
+        "telegram_id": user_id,
+        "token": token,
+        "status": "waiting"
+    })
+)
+
+# 2. Admin Sessions (TTL 1 час)
+redis_client.setex(
+    f"admin_session:{token}",
+    3600,
+    json.dumps({
+        "telegram_id": admin_id,
+        "expires": datetime.now(timezone.utc).isoformat()
+    })
+)
+
+# 3. Embeddings Cache (TTL 24 часа)
+redis_client.setex(
+    f"embedding:{text_hash}",
+    86400,
+    json.dumps(embedding_vector)
+)
+
+# 4. Rate Limiting (TTL 1 минута)
+current = redis_client.incr(f"rate:{user_id}:rag_query")
+if current == 1:
+    redis_client.expire(f"rate:{user_id}:rag_query", 60)
+```
+
+### Prefixes для изоляции
+
+```python
+# ВСЕГДА используйте prefixes
+QR_SESSION_PREFIX = "qr_session:"
+ADMIN_SESSION_PREFIX = "admin_session:"
+EMBEDDING_PREFIX = "embedding:"
+RATE_LIMIT_PREFIX = "rate:"
+```
+
+## 🔄 Migrations
+
+### Migration Script Template
+
+```python
+#!/usr/bin/env python3
+"""
+Migration: Add roles and subscriptions
+Date: 2025-10-12
+"""
+import os
+import sys
+from datetime import datetime, timezone
+import psycopg2
+
+def get_database_url() -> str:
+    url = os.getenv("TELEGRAM_DATABASE_URL")
+    
+    if not url or "sqlite" in url.lower():
+        raise ValueError("Только PostgreSQL поддерживается!")
+    
+    return url
+
+def backup_database():
+    """Backup перед миграцией"""
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    print(f"📦 Backup: {timestamp}")
+    # docker exec supabase-db pg_dump ...
+
+def migrate():
+    conn = psycopg2.connect(get_database_url())
+    cursor = conn.cursor()
+    
+    try:
+        # Миграция
+        cursor.execute("""
+            ALTER TABLE users
+            ADD COLUMN IF NOT EXISTS role VARCHAR DEFAULT 'user',
+            ADD COLUMN IF NOT EXISTS subscription_type VARCHAR DEFAULT 'free'
+        """)
+        
+        conn.commit()
+        print("✅ Миграция завершена")
+        
+    except Exception as e:
+        conn.rollback()
+        print(f"❌ Ошибка: {e}")
+        raise
+    finally:
+        cursor.close()
+        conn.close()
+
+if __name__ == "__main__":
+    backup_database()
+    migrate()
+```
+
+## ✅ Verification Steps
+
+1. **PostgreSQL используется:**
+```bash
+grep -r "sqlite" database.py
+# Должен вернуть 0 результатов
+```
+
+2. **Timezone-aware datetime:**
+```python
+# Все datetime должны иметь timezone
+assert user.created_at.tzinfo is not None
+assert invite.expires_at.tzinfo is not None
+```
+
+3. **Redis подключение:**
+```bash
+docker exec redis redis-cli PING
+# PONG
+```
+
+4. **Connection pooling:**
+```python
+# Проверка pool
+from database import engine
+print(f"Pool size: {engine.pool.size()}")
+```
+
+5. **Many-to-many работает:**
+```python
+user = db.query(User).first()
+assert len(user.channels) >= 0  # Без ошибок
+```
+
+## 🚨 Последствия нарушения
+
+**SQLite fallback:**
+- ❌ Production deploy упадет
+- ❌ Timezone handling сломается
+- ❌ Concurrent access проблемы
+
+**Naive datetime:**
+- ❌ Неверные сравнения expires_at
+- ❌ PostgreSQL ошибки при сохранении
+- ❌ Отображение неверного времени
+
+**Redis без prefixes:**
+- ❌ Конфликты ключей
+- ❌ Утечка sessions между типами
+
+## 📚 Связанные правила
+
+- `01-core.mdc` — Основные правила
+- `05-security.mdc` — Sessions, authentication
+- `06-admin.mdc` — Admin operations, history

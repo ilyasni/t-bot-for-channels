@@ -1,0 +1,531 @@
+---
+title: "Groups Functionality"
+description: "Telegram Groups дайджесты, упоминания, n8n multi-agent workflows"
+tags: ["groups", "digest", "mentions", "n8n", "multi-agent"]
+version: "3.4"
+ruleType: "autoAttached"
+priority: medium
+scope:
+  - "telethon/*group*.py"
+  - "telethon/bot.py"
+  - "n8n/workflows/group*.json"
+  - "n8n/workflows/agent_*.json"
+---
+
+# Groups Functionality
+
+> **Rule Type:** Auto-Attached  
+> **Lines:** < 500 (optimized)  
+> **Priority:** Medium
+
+## 🎯 High-Level Overview
+
+**Groups система** — дайджесты диалогов и уведомления о @упоминаниях в Telegram группах.
+
+**Essential Stack:**
+- Telethon для мониторинга групп
+- PostgreSQL (Group, GroupMention, GroupSettings)
+- n8n Multi-Agent Workflows (Sub-workflows архитектура)
+- GigaChat для AI-анализа диалогов
+- Redis для кеширования
+
+**Critical Pattern:**
+```python
+# ✅ ВСЕГДА фильтруйте по user_id и group_id
+mentions = db.query(GroupMention).filter(
+    GroupMention.user_id == user_id,
+    GroupMention.group_id == group_id
+).all()
+
+# ❌ НИКОГДА без фильтрации
+mentions = db.query(GroupMention).all()  # NO! Data leak!
+```
+
+## 📊 Database Models
+
+### Group Model
+
+```python
+# models.py
+class Group(Base):
+    __tablename__ = "groups"
+    
+    id = Column(BigInteger, primary_key=True)
+    group_id = Column(BigInteger, unique=True, nullable=False)  # Telegram group ID
+    group_name = Column(String, nullable=False)
+    group_type = Column(String, default="group")  # group, supergroup, channel
+    
+    # Timestamps
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), onupdate=lambda: datetime.now(timezone.utc))
+    
+    # Relationships
+    users = relationship("User", secondary="user_group", back_populates="groups")
+    mentions = relationship("GroupMention", back_populates="group")
+    settings = relationship("GroupSettings", back_populates="group", uselist=False)
+```
+
+### GroupMention Model
+
+```python
+class GroupMention(Base):
+    __tablename__ = "group_mentions"
+    
+    id = Column(BigInteger, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    group_id = Column(BigInteger, ForeignKey("groups.id"), nullable=False)
+    
+    # Message details
+    message_id = Column(BigInteger, nullable=False)
+    message_text = Column(String)
+    sender_username = Column(String)
+    
+    # AI Analysis (from n8n workflow)
+    context_summary = Column(String)
+    mention_reason = Column(String)
+    urgency = Column(String)  # low, medium, high
+    key_points = Column(JSON)
+    
+    # Timestamps
+    mentioned_at = Column(DateTime(timezone=True), nullable=False)
+    notified = Column(Boolean, default=False)
+    
+    # Relationships
+    user = relationship("User", back_populates="group_mentions")
+    group = relationship("Group", back_populates="mentions")
+```
+
+### GroupSettings Model
+
+```python
+class GroupSettings(Base):
+    __tablename__ = "group_settings"
+    
+    id = Column(BigInteger, primary_key=True)
+    group_id = Column(BigInteger, ForeignKey("groups.id"), unique=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    
+    # Settings
+    mentions_enabled = Column(Boolean, default=True)
+    digest_enabled = Column(Boolean, default=True)
+    digest_frequency = Column(String, default="daily")  # hourly, daily, weekly
+    
+    # Timestamps
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), onupdate=lambda: datetime.now(timezone.utc))
+    
+    # Relationships
+    group = relationship("Group", back_populates="settings")
+    user = relationship("User")
+```
+
+### User-Group Association
+
+```python
+# Association table
+user_group = Table(
+    'user_group',
+    Base.metadata,
+    Column('user_id', Integer, ForeignKey('users.id')),
+    Column('group_id', BigInteger, ForeignKey('groups.id')),
+    UniqueConstraint('user_id', 'group_id')
+)
+
+# User model extension
+class User(Base):
+    # ...existing fields...
+    
+    # Groups relationship
+    groups = relationship("Group", secondary="user_group", back_populates="users")
+    group_mentions = relationship("GroupMention", back_populates="user")
+    
+    def can_add_group(self) -> bool:
+        """Check if user can add more groups (subscription limit)"""
+        tier = SUBSCRIPTION_TIERS.get(self.subscription_type, {})
+        max_groups = tier.get("max_groups", 0)
+        return len(self.groups) < max_groups
+```
+
+## 🤖 Bot Commands
+
+### Add Group
+
+```python
+# bot.py
+async def add_group_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/add_group https://t.me/groupname or https://t.me/+INVITE_HASH"""
+    user = get_or_create_user(update.effective_user.id)
+    
+    # Check subscription limit
+    if not user.can_add_group():
+        await update.message.reply_text(
+            f"❌ Достигнут лимит групп: {user.max_groups}\n"
+            f"Подписка: {user.subscription_type}"
+        )
+        return
+    
+    # Parse group link
+    group_url = context.args[0] if context.args else None
+    
+    # Handle private groups (invite links)
+    if "+c4BzS2" in group_url or group_url.startswith("https://t.me/+"):
+        # Iterate through user's dialogs to find private group
+        async for dialog in client.iter_dialogs():
+            if dialog.is_group or dialog.is_channel:
+                # Match by invite hash or ID
+                ...
+```
+
+### Group Digest
+
+```python
+async def group_digest_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/group_digest [hours] - Generate AI digest of group dialogue"""
+    hours = int(context.args[0]) if context.args else 24
+    user_id = update.effective_user.id
+    
+    # Get user's groups
+    db = SessionLocal()
+    user = db.query(User).filter(User.telegram_id == user_id).first()
+    
+    if not user.groups:
+        await update.message.reply_text("❌ У вас нет добавленных групп")
+        return
+    
+    # Select group (inline keyboard)
+    keyboard = [
+        [InlineKeyboardButton(
+            escape_markdown_v2(group.group_name),
+            callback_data=f"digest_{group.id}_{hours}"
+        )]
+        for group in user.groups
+    ]
+    
+    await update.message.reply_text(
+        "📊 Выберите группу:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+```
+
+## 🔄 n8n Multi-Agent Workflows
+
+### Sub-workflows Architecture
+
+```
+Group Digest Orchestrator (main)
+    ↓
+    ├── Agent 1: Topic Extractor
+    ├── Agent 2: Speaker Analyzer
+    └── Agent 3: Summarizer
+    ↓
+Aggregate Results → Format Response
+```
+
+**Critical Patterns:**
+
+```javascript
+// ✅ Correct - Execute Workflow узлы
+{
+  "workflowId": "Agent: Topic Extractor",  // По имени!
+  "source": "data",
+  "mode": "once"
+}
+
+// ✅ Correct - Aggregate Results с fallback
+const aggregator = $('Agent 4: Aggregator').first().json;
+if (!aggregator || !aggregator.topics) {
+    // Fallback: use results from Agents 1-3
+    const topics = $('Agent 1: Topic Extractor').first().json.topics || [];
+    const speakers = $('Agent 2: Speaker Analyzer').first().json.speakers || {};
+    const summary = $('Agent 3: Summarizer').first().json.summary || "";
+}
+
+// ❌ Bad - workflowId by ID
+{
+  "workflowId": "123",  // NO! Use name!
+}
+```
+
+### Workflow Files
+
+```
+n8n/workflows/
+├── group_digest_orchestrator.json       # Main workflow (active)
+├── agent_topic_extractor.json          # Sub-workflow 1
+├── agent_speaker_analyzer.json         # Sub-workflow 2
+├── agent_summarizer.json               # Sub-workflow 3
+├── group_mention_analyzer_v2.json      # Mention analysis
+└── README_GROUP_WORKFLOWS.md           # Documentation
+```
+
+## 📝 Group Digest Generator
+
+### Client Pattern
+
+```python
+# group_digest_generator.py
+import httpx
+from markdown_utils import escape_markdown_v2
+
+class GroupDigestGenerator:
+    def __init__(self):
+        self.n8n_webhook = os.getenv(
+            "N8N_GROUP_DIGEST_WEBHOOK",
+            "http://n8n:5678/webhook/group-digest"
+        )
+        self.timeout = int(os.getenv("N8N_DIGEST_TIMEOUT", 60))
+    
+    async def generate_digest(
+        self,
+        group_id: int,
+        hours: int = 24,
+        max_messages: int = 100
+    ) -> Dict[str, Any]:
+        """Generate AI digest via n8n multi-agent workflow"""
+        
+        # Fetch messages
+        messages = await self._fetch_group_messages(group_id, hours, max_messages)
+        
+        if not messages:
+            return {
+                "error": "No messages found",
+                "message_count": 0
+            }
+        
+        # Call n8n webhook
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.post(
+                self.n8n_webhook,
+                json={
+                    "group_id": group_id,
+                    "messages": [
+                        {
+                            "id": msg.id,
+                            "sender": msg.sender.username or "Unknown",
+                            "text": msg.text,
+                            "date": msg.date.isoformat()
+                        }
+                        for msg in messages
+                    ],
+                    "hours": hours,
+                    "message_count": len(messages)
+                }
+            )
+            
+            response.raise_for_status()
+            return response.json()
+    
+    def format_digest_for_telegram(self, digest: Dict) -> str:
+        """Format digest with Markdown escaping"""
+        # ✅ ВСЕГДА экранируйте Markdown
+        topics = digest.get("topics", [])
+        speakers = digest.get("speakers_summary", {})
+        summary = digest.get("overall_summary", "")
+        
+        text = f"# 📊 Дайджест группы\n\n"
+        text += f"**Период:** {digest.get('period', 'N/A')}\n"
+        text += f"**Сообщений:** {digest.get('message_count', 0)}\n\n"
+        
+        if topics:
+            text += "**Темы:**\n"
+            for topic in topics:
+                text += f"• {escape_markdown_v2(topic)}\n"
+        
+        if summary:
+            text += f"\n**Резюме:**\n{escape_markdown_v2(summary)}"
+        
+        return text
+```
+
+## 🤖 n8n Multi-Agent Workflows
+
+### Sub-workflows Architecture
+
+```python
+# ✅ Correct - n8n agent workflows
+AGENT_WORKFLOWS = {
+    "topic_extractor": "agent_topic_extractor.json",
+    "speaker_analyzer": "agent_speaker_analyzer.json", 
+    "summarizer": "agent_summarizer.json",
+    "supervisor": "agent_supervisor_synthesizer.json"
+}
+
+# Orchestrator workflow
+async def process_group_digest(group_id: int, messages: List[Message]):
+    """Обрабатывает дайджест группы через n8n agents"""
+    
+    # 1. Topic extraction
+    topics = await call_n8n_workflow(
+        "agent_topic_extractor",
+        {"messages": messages}
+    )
+    
+    # 2. Speaker analysis
+    speakers = await call_n8n_workflow(
+        "agent_speaker_analyzer", 
+        {"messages": messages}
+    )
+    
+    # 3. Summarization
+    summary = await call_n8n_workflow(
+        "agent_summarizer",
+        {"messages": messages, "topics": topics}
+    )
+    
+    # 4. Final synthesis
+    digest = await call_n8n_workflow(
+        "agent_supervisor_synthesizer",
+        {"topics": topics, "speakers": speakers, "summary": summary}
+    )
+    
+    return digest
+```
+
+### Agent Communication
+
+```python
+# ✅ Correct - n8n webhook calls
+async def call_n8n_workflow(workflow_name: str, data: Dict) -> Dict:
+    """Вызывает n8n workflow через webhook"""
+    n8n_url = f"http://n8n:5678/webhook/{workflow_name}"
+    
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        response = await client.post(n8n_url, json=data)
+        response.raise_for_status()
+        return response.json()
+```
+
+## 🎯 Markdown Escaping (CRITICAL!)
+
+### Utility Function
+
+```python
+# markdown_utils.py
+def escape_markdown_v2(text: str) -> str:
+    """
+    Escape special Markdown V2 characters
+    
+    CRITICAL: Always use this for Telegram bot messages!
+    """
+    special_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+    
+    for char in special_chars:
+        text = text.replace(char, f'\\{char}')
+    
+    return text
+```
+
+### Usage
+
+```python
+# ✅ Correct - escape all user content
+from markdown_utils import escape_markdown_v2
+
+group_name = escape_markdown_v2(group.group_name)
+summary = escape_markdown_v2(digest["overall_summary"])
+
+await update.message.reply_text(
+    f"📊 Дайджест: {group_name}\n\n{summary}",
+    parse_mode="MarkdownV2"
+)
+
+# ❌ Bad - no escaping
+await update.message.reply_text(
+    f"📊 Дайджест: {group.group_name}",  # NO! Can fail with _
+    parse_mode="MarkdownV2"
+)
+```
+
+## ✅ Verification Checklist
+
+- [ ] Groups isolated by `user_id` (no data leak)
+- [ ] Subscription limits checked (`user.can_add_group()`)
+- [ ] Timezone-aware datetime for all timestamps
+- [ ] Markdown V2 escaping for all text
+- [ ] n8n workflows use Sub-workflows architecture
+- [ ] Execute Workflow nodes reference by name, not ID
+- [ ] Aggregate Results has fallback logic
+- [ ] Private groups handled (iterate dialogs)
+- [ ] `message_count` passed correctly to n8n
+- [ ] `period` calculated from `hours` parameter
+
+## ❌ Deprecated Patterns
+
+**NEVER do this:**
+
+```python
+# ❌ No user filtering
+groups = db.query(Group).all()  # NO! Data leak!
+
+# ❌ No subscription check
+user.groups.append(group)  # NO! Check limit first!
+
+# ❌ No Markdown escaping
+text = f"Group: {group.group_name}"  # NO! Use escape_markdown_v2!
+
+# ❌ Naive datetime
+mentioned_at = datetime.now()  # NO! Use timezone.utc!
+
+# ❌ n8n workflow by ID
+{"workflowId": "123"}  # NO! Use name!
+
+# ❌ No fallback in Aggregate
+const result = $('Agent 4').first().json;  # NO! Add fallback!
+```
+
+## 🎯 Quick Examples
+
+### ✅ Correct
+
+```python
+# User filtering
+groups = db.query(Group).join(user_group).filter(
+    user_group.c.user_id == user_id
+).all()
+
+# Subscription check
+if user.can_add_group():
+    user.groups.append(group)
+
+# Markdown escaping
+text = escape_markdown_v2(group.group_name)
+
+# Timezone-aware
+mentioned_at = datetime.now(timezone.utc)
+
+# n8n by name
+{"workflowId": "Agent: Topic Extractor"}
+
+# Aggregate with fallback
+const topics = $('Agent 4').first().json?.topics || 
+               $('Agent 1').first().json?.topics || [];
+```
+
+### ❌ Bad
+
+```python
+# No filtering
+groups = db.query(Group).all()
+
+# No check
+user.groups.append(group)
+
+# No escaping
+text = group.group_name
+
+# Naive
+mentioned_at = datetime.now()
+
+# By ID
+{"workflowId": "123"}
+
+# No fallback
+const topics = $('Agent 4').first().json.topics;
+```
+
+## 📚 Related Rules
+
+- `01-core.mdc` — User filtering, timezone-aware datetime
+- `03-database.mdc` — Models, relationships, migrations
+- `08-api.mdc` — API endpoints patterns
+- `09-external.mdc` — n8n integration, webhooks

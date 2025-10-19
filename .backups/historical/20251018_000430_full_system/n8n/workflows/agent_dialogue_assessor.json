@@ -1,0 +1,47 @@
+{
+  "name": "Agent: Dialogue Assessor",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "execute-workflow-trigger",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Heuristic Dialogue Assessment (deterministic, fast, reliable)\nconst input = $input.first().json;\nconst messages = input.messages || [];\nconst hours = input.hours || 24;\nconst messagesText = input.messages_text || '';\n\nconsole.log('🔍 Assessing dialogue:', {\n  messageCount: messages.length,\n  hours: hours,\n  textLength: messagesText.length\n});\n\n// 1. Determine detail_level based on message count\nlet detail_level;\nif (messages.length === 0) {\n  detail_level = 'micro';\n} else if (messages.length <= 3) {\n  detail_level = 'minimal';\n} else if (messages.length <= 10) {\n  detail_level = 'standard';\n} else if (messages.length <= 25) {\n  detail_level = 'detailed';\n} else {\n  detail_level = 'comprehensive';\n}\n\n// 2. Determine dialogue_type based on content analysis\nlet dialogue_type = 'casual_chat';\nconst text = messagesText.toLowerCase();\n\n// Technical discussion indicators\nif (text.includes('api') || text.includes('код') || text.includes('программ') || \n    text.includes('техническ') || text.includes('разработк') || text.includes('bug') ||\n    text.includes('ошибк') || text.includes('функци') || text.includes('систем')) {\n  dialogue_type = 'technical_discussion';\n}\n\n// Problem solving indicators\nelse if (text.includes('проблем') || text.includes('решен') || text.includes('как') ||\n         text.includes('помощ') || text.includes('поддержк') || text.includes('вопрос')) {\n  dialogue_type = 'problem_solving';\n}\n\n// Conflict indicators\nelse if (text.includes('спор') || text.includes('конфликт') || text.includes('не соглас') ||\n         text.includes('критик') || text.includes('возраж') || text.includes('против')) {\n  dialogue_type = 'conflict';\n}\n\n// Collaboration indicators\nelse if (text.includes('совместн') || text.includes('команд') || text.includes('вместе') ||\n         text.includes('проект') || text.includes('планир') || text.includes('обсуждаем')) {\n  dialogue_type = 'collaboration';\n}\n\n// 3. Calculate token budgets based on detail_level\nlet token_budgets = {};\nconst baseTokens = {\n  'micro': { topics: 100, emotions: 100, speakers: 100, key_moments: 100, timeline: 100, summary: 150, context_links: 100 },\n  'minimal': { topics: 200, emotions: 200, speakers: 200, key_moments: 200, timeline: 200, summary: 300, context_links: 200 },\n  'standard': { topics: 400, emotions: 400, speakers: 400, key_moments: 400, timeline: 400, summary: 600, context_links: 400 },\n  'detailed': { topics: 600, emotions: 600, speakers: 600, key_moments: 600, timeline: 600, summary: 800, context_links: 600 },\n  'comprehensive': { topics: 800, emotions: 800, speakers: 800, key_moments: 800, timeline: 800, summary: 1000, context_links: 800 }\n};\n\ntoken_budgets = baseTokens[detail_level] || baseTokens['standard'];\n\n// 4. Analyze content features\nconst has_links = /https?:\\/\\/|www\\.|\\.[a-z]{2,}\\//i.test(messagesText);\nconst has_problems = /проблем|ошибк|баг|не работ|сломан|неправильн/i.test(messagesText);\nconst has_decisions = /решен|выбор|выбира|определ|решил|соглас/i.test(messagesText);\n\n// 5. Build assessment object\nconst assessment = {\n  detail_level: detail_level,\n  dialogue_type: dialogue_type,\n  message_count: messages.length,\n  token_budgets: token_budgets,\n  has_links: has_links,\n  has_problems: has_problems,\n  has_decisions: has_decisions,\n  hours: hours,\n  text_length: messagesText.length\n};\n\nconsole.log('✅ Assessment completed:', {\n  detail_level,\n  dialogue_type,\n  message_count: messages.length,\n  has_links,\n  has_problems,\n  has_decisions\n});\n\nreturn [\n  {\n    json: {\n      assessment: assessment\n    }\n  }\n];"
+      },
+      "id": "assess-dialogue",
+      "name": "Assess Dialogue",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300]
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Assess Dialogue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "updatedAt": "2025-10-14T19:00:00.000Z",
+  "versionId": "1"
+}
+
+

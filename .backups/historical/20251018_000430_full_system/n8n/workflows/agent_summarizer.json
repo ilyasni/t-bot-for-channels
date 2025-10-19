@@ -1,0 +1,136 @@
+{
+  "name": "Agent: Context Summarizer",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "execute-workflow-trigger",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Prepare HTTP Request data for context summarization with ALL previous context\nconst items = $input.all();\nconst data = items[0].json;\n\n// Get original messages from execution context\nconst executionData = $execution.customData.getAll();\nconst originalMessages = executionData.original_messages || data.messages || [];\nconst originalMessagesText = executionData.original_messages_text || data.messages_text || \"\";\n\nconst messagesText = originalMessagesText;\nconst hours = data.hours || 24;\nconst assessment = data.assessment || {};\nconst topics = data.topics || [];\nconst emotions = data.emotions || {};\nconst speakers = data.speakers || {};\nconst detailLevel = assessment.detail_level || \"standard\";\nconst dialogueType = assessment.dialogue_type || \"casual_chat\";\n\n// Adaptive summary lengths\nconst summarySpecs = {\n  micro: {tokens: 150, style: \"одно предложение\", length: \"~20 слов\"},\n  minimal: {tokens: 300, style: \"один параграф\", length: \"2-3 предложения\"},\n  standard: {tokens: 600, style: \"2-3 параграфа\", length: \"структурированное описание\"},\n  detailed: {tokens: 1200, style: \"многосекционный отчет\", length: \"3-4 параграфа с деталями\"},\n  comprehensive: {tokens: 2000, style: \"полный отчет\", length: \"executive summary + детальный анализ\"}\n};\nconst spec = summarySpecs[detailLevel] || summarySpecs.standard;\n\n// Build system message\nconst systemMessage = \"Ты - аналитик контекста диалогов. Создаешь адаптивные резюме разной детализации с учетом эмоционального контекста. Возвращай ТОЛЬКО валидный JSON: {\\\"summary\\\": \\\"...\\\"}. ЗАПРЕЩЕНО: markdown, комментарии, придумывание данных.\";\n\n// === BUILD USER MESSAGE ===\n\nconst userMessage = `Создай ${spec.style} резюме диалога.\\n\\nУРОВЕНЬ ДЕТАЛИЗАЦИИ: ${detailLevel}\\nТИП ДИАЛОГА: ${dialogueType}\\nПЕРИОД: ${hours} часов\\n\\n=== КОНТЕКСТ ОТ АГЕНТОВ ===\\n\\nТЕМЫ:\\n${topics.map(t => `- ${t.name} (приоритет: ${t.priority})`).join('\\n')}\\n\\nЭМОЦИОНАЛЬНЫЙ АНАЛИЗ:\\n- Общий тон: ${emotions.overall_tone || emotions.tone || 'neutral'}\\n- Атмосфера: ${emotions.atmosphere || 'обычная'}\\n${emotions.emotional_arc ? `- Динамика: ${emotions.emotional_arc}` : ''}\\n\\nУЧАСТНИКИ:\\n${Object.keys(speakers).map(s => {\n  const sp = speakers[s];\n  if (typeof sp === 'string') {\n    return `- @${s}: ${sp}`;\n  } else {\n    return `- @${s}: ${sp.role || 'участник'} - ${sp.contributions || (sp.main_topics ? sp.main_topics.join(', ') : '') || ''}`;\n  }\n}).join('\\n')}\\n\\nСООБЩЕНИЯ:\\n${messagesText}\\n\\n=== ЗАДАЧА ===\\n\\nСоздай резюме длиной ${spec.length}.\\n\\n${detailLevel === 'micro' ? `ФОРМАТ: Одно предложение суммирующее суть + эмоциональный тон.` : ''}\\n${detailLevel === 'minimal' ? `ФОРМАТ: Один параграф (2-3 предложения) с общей сутью и тоном.` : ''}\\n${detailLevel === 'standard' ? `ФОРМАТ: 2-3 параграфа:\\n1. Контекст и основные темы\\n2. Ключевые обсуждения и участники\\n3. Итоги и эмоциональный тон` : ''}\\n${detailLevel === 'detailed' ? `ФОРМАТ: Структурированный отчет:\\n1. Executive summary (1 параграф)\\n2. Детальное описание обсуждений\\n3. Эмоциональная динамика\\n4. Выводы и действия` : ''}\\n${detailLevel === 'comprehensive' ? `ФОРМАТ: Полный отчет:\\n1. Executive summary\\n2. Детальный анализ по темам\\n3. Эмоциональный arc\\n4. Связи и паттерны\\n5. Рекомендации` : ''}\\n\\nУчитывай:\\n- Эмоциональный контекст из анализа\\n- Роли участников\\n- Приоритеты тем\\n\\nФОРМАТ JSON:\\n{\"summary\": \"текст резюме\"}\\n\\nВАЖНО: Верни ТОЛЬКО валидный JSON!`;\n\nreturn [\n  {\n    json: {\n      system_message: systemMessage,\n      user_message: userMessage,\n      max_tokens: spec.tokens,\n      detail_level: detailLevel\n    }\n  }\n];"
+      },
+      "id": "prepare-prompt",
+      "name": "Prepare Summary Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://gpt2giga-proxy:8000/v1/chat/completions",
+        "authentication": "none",
+        "requestMethod": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyContentType": "json",
+        "jsonBody": "={{ {\"model\": \"GigaChat-Pro\", \"messages\": [{\"role\": \"system\", \"content\": $json.system_message}, {\"role\": \"user\", \"content\": $json.user_message}], \"temperature\": 0.1, \"max_tokens\": $json.max_tokens, \"response_format\": {\"type\": \"json_object\"}} }}",
+        "options": {}
+      },
+      "id": "gigachat-call",
+      "name": "GigaChat: Summarize Context",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse GigaChat response from gpt2giga proxy\nconst response = $input.first().json.choices?.[0]?.message?.content || '{}';\n\nconsole.log('📥 GigaChat response received:', response.substring(0, 100));\n\nreturn [\n  {\n    json: {\n      raw_content: response\n    }\n  }\n];"
+      },
+      "id": "parse-summary-response",
+      "name": "Parse Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "workflowId": "utility_json_guardrail",
+        "source": "database",
+        "inputData": {
+          "values": [
+            {
+              "json": {
+                "raw_content": "={{ $json.response || choices[0].message.content }}",
+                "data_type": "summary",
+                "original_messages": "={{ $execution.customData.getAll().original_messages }}"
+              }
+            }
+          ]
+        }
+      },
+      "id": "execute-guardrail",
+      "name": "Execute Guardrail",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [850, 300]
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Prepare Summary Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Summary Prompt": {
+      "main": [
+        [
+          {
+            "node": "GigaChat: Summarize Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GigaChat: Summarize Context": {
+      "main": [
+        [
+          {
+            "node": "Parse Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Response": {
+      "main": [
+        [
+          {
+            "node": "Execute Guardrail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "updatedAt": "2025-10-13T16:10:00.000Z",
+  "versionId": "1"
+}
+

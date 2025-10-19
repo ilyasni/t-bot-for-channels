@@ -1,0 +1,359 @@
+---
+title: "Cursor Rules Changelog"
+description: "История изменений правил для Telegram Bot"
+tags: ["changelog", "versioning"]
+version: "3.5"
+priority: low
+ruleType: "manual"
+autoAttach: false
+---
+
+# Cursor Rules Changelog
+
+## [3.5.0] - 2025-01-15
+
+### 🎯 LLM Evaluation System Release
+
+**🆕 New Module:**
+- ✅ **12-evaluation.mdc** (520 lines) - LLM Evaluation System
+  - Ragas integration для оценки качества ответов
+  - Golden datasets management (CRUD операции)
+  - Custom Telegram-specific metrics
+  - Prometheus metrics и Grafana dashboards
+  - Admin commands и CLI tools
+  - Langfuse integration для observability
+
+**🔄 Updates:**
+- ✅ Обновлен `.cursorrules` до версии 3.5.0
+  - Добавлена информация о LLM Evaluation System
+  - Обновлен список модулей (12 файлов)
+  - Добавлена навигация для evaluation задач
+- ✅ Обновлен `04-development.mdc`
+  - Добавлены тесты для evaluation системы
+  - Примеры unit тестов для schemas, golden_dataset_manager, bot_evaluator
+  - Команды для запуска evaluation тестов
+- ✅ Добавлены comprehensive unit тесты
+  - `test_evaluation_schemas.py` - Pydantic модели
+  - `test_golden_dataset_manager.py` - CRUD операции
+  - `test_bot_evaluator.py` - Ragas integration
+  - `test_evaluation_runner.py` - Batch evaluation orchestration
+
+**🧪 Testing Enhancements:**
+- ✅ Полное покрытие тестами evaluation системы
+- ✅ Mock-тестирование для Ragas dependencies
+- ✅ Async/await patterns в тестах
+- ✅ Error handling scenarios
+- ✅ Concurrency testing для batch evaluations
+
+**📊 Monitoring & Observability:**
+- ✅ Prometheus metrics для evaluation scores
+- ✅ Grafana dashboard для visualization
+- ✅ Langfuse integration для trace tracking
+- ✅ Admin commands для monitoring через Telegram
+
+## [3.4.0] - 2025-10-15
+
+### 🎯 Maintenance & Organization Release
+
+**🆕 New Module:**
+- ✅ **11-maintenance.mdc** (450 lines) - Unified retention service
+  - Smart retention logic (учет digest frequency)
+  - Orphaned channels cleanup
+  - Dry run mode для безопасности
+  - Context7 best practices (PostgreSQL partitioning)
+
+**🔄 Updates:**
+- ✅ Обновлены все модульные правила до версии 3.4
+- ✅ Добавлены правила для maintenance services
+- ✅ Улучшена структура проекта в core rules
+- ✅ Очищена документация в корне проекта
+
+**📁 Project Organization:**
+- ✅ Перемещены implementation summaries в `docs/archive/implementation/`
+- ✅ Перемещены deployment docs в `docs/archive/deployment/`
+- ✅ Перемещены testing docs в `docs/archive/testing/`
+- ✅ Добавлены comprehensive unit tests для unified retention service
+
+## [3.3.0] - 2025-10-13
+
+### 🎯 Optimization Release + Groups Module
+
+**Aligned with official Cursor best practices:**
+- ✅ All modules now < 550 lines (target: 500)
+- ✅ Added `ruleType` specification to all modules
+- ✅ Improved structure following Trigger.dev guide
+- ✅ Enhanced Quick Examples (✅/❌) sections
+- ✅ Better Verification Checklists
+- ✅ Testing section in main `.cursorrules`
+- ✅ Common Pitfalls tables
+
+**🆕 New Module:**
+- ✅ **10-groups.mdc** (480 lines) - Groups functionality
+  - Database models (Group, GroupMention, GroupSettings)
+  - Bot commands (/add_group, /group_digest, /my_groups)
+  - n8n Multi-Agent Workflows (Sub-workflows architecture)
+  - Markdown V2 escaping patterns
+  - Private groups support
+  - AI digest generation via n8n
+
+### 📏 File Size Optimization
+
+| Module | Before | After | Reduction |
+|--------|--------|-------|-----------|
+| 05-security.mdc | 511 | 463 | -48 lines |
+| 06-admin.mdc | 545 | 537 | -8 lines |
+| 07-rag.mdc | 590 | 543 | -47 lines |
+| 08-api.mdc | 598 | 525 | -73 lines |
+| 09-external.mdc | 534 | 424 | -110 lines |
+
+**Total reduction:** 286 lines across 5 files
+
+### ✨ New Features
+
+- **Rule Type Metadata**
+  - `always` - Main `.cursorrules`
+  - `autoAttached` - Context-specific modules
+  - `manual` - CHANGELOG, README
+
+- **Structured Sections** (following Trigger.dev guide)
+  - High-Level Overview with essential info
+  - Critical Patterns (first, not buried)
+  - Essential elements before examples
+  - Verification Checklist per module
+  - Quick Examples (✅ Correct / ❌ Bad)
+  - Common Pitfalls with solutions
+
+- **Testing Section** in `.cursorrules`
+  - Pre-commit checklist
+  - Linter, type checker, tests
+  - Sensitive data check
+  - Docker rebuild verification
+
+- **Priority System** in YAML frontmatter
+  - `critical` - Core rules (01-core, 03-database, 05-security)
+  - `high` - Architecture, development
+  - `medium` - Features (admin, RAG, API)
+  - `low` - External services, changelog
+
+### 🔧 Improved
+
+- **Better Code Examples**
+  - Removed redundant full endpoint implementations
+  - Focused on patterns, not complete code
+  - More "what NOT to do" examples
+  - Side-by-side correct/incorrect patterns
+
+- **Clearer Scope**
+  - More specific file patterns
+  - Exclusions (`!` syntax) for tests/scripts
+  - Better auto-attachment logic
+
+- **Documentation Links**
+  - References to official Cursor docs
+  - Links to Trigger.dev guide
+  - awesome-cursorrules references
+
+### 📝 References
+
+Based on official recommendations:
+- [Cursor Docs - Rules](https://docs.cursor.com/context/rules)
+- [Trigger.dev - How to write great Cursor Rules](https://trigger.dev/blog/cursor-rules)
+- [awesome-cursorrules](https://github.com/PatrickJS/awesome-cursorrules)
+- [Cursor Forum - Best Practices](https://forum.cursor.com/t/my-best-practices-for-mdc-rules-and-troubleshooting/50526)
+
+---
+
+## [3.2.0] - 2025-10-13
+
+### ✨ Added
+- **YAML frontmatter** во всех модулях
+  - `scope` для автоматического применения
+  - `tags` для категоризации
+  - `priority` для разрешения конфликтов
+  - `autoAttach` для автоматической загрузки
+
+- **Context7 auto-integration hints**
+  - Автоматические подсказки для AI
+  - Примеры запросов в каждом модуле
+
+- **Quick Examples** в конце каждого модуля
+  - ✅ Correct patterns (3-5 примеров)
+  - ❌ Bad patterns для избегания
+
+- **Conflict Resolution** блоки
+  - Правила разрешения конфликтов между модулями
+  - Приоритеты при пересечении scope
+
+- **Verification Checklist Summary**
+  - Краткий чеклист в главном .cursorrules
+  - Автоматическая проверка после генерации
+
+- **Отдельный CHANGELOG.mdc**
+  - Трекинг версий отдельно от README
+  - Детальная история изменений
+
+### 🔧 Changed
+- Переместили файлы в `.cursor/rules/telegram-bot/`
+- Обновили README.md с улучшенной навигацией
+- Улучшили структуру примеров в модулях
+
+### 📝 Improved
+- Более четкие примеры использования Context7
+- Расширенная документация scope для каждого модуля
+- Улучшенные описания в YAML frontmatter
+
+---
+
+## [3.1.0] - 2025-10-12
+
+### ✨ Added
+- **Context7 mandatory rule** (#0)
+  - Обязательное использование перед разработкой
+  - Примеры для всех основных технологий
+  - Интеграция в verification steps
+
+- **QR Login система**
+  - `qr_auth_manager.py` - QR сессии
+  - `bot_login_handlers_qr.py` - ConversationHandler
+  - Mini App UI через FastAPI
+
+- **Admin Panel через Mini App**
+  - `admin_panel_manager.py` - сессии администраторов
+  - Full SPA с tabs (2700+ строк)
+  - REST API для управления
+
+- **Система ролей и подписок**
+  - User roles (admin/user)
+  - 5 subscription tiers
+  - Invite codes система
+  - SubscriptionHistory для аудита
+
+### 🔧 Changed
+- **PostgreSQL ONLY** - удален SQLite fallback
+- **Redis sessions** - shared state между контейнерами
+- **Timezone-aware datetime** везде
+
+### 📝 Improved
+- UI/UX best practices для Mini Apps
+- Темная тема support
+- Skeleton loading
+- Модульная структура JavaScript
+
+---
+
+## [3.0.0] - 2025-10-12
+
+### ✨ Added
+- **Модульная структура** - 9 файлов (< 600 строк каждый)
+  - 01-core.mdc - основные правила
+  - 02-architecture.mdc - микросервисы
+  - 03-database.mdc - PostgreSQL, Redis
+  - 04-development.mdc - workflow
+  - 05-security.mdc - QR Login, auth
+  - 06-admin.mdc - Admin Panel
+  - 07-rag.mdc - RAG система
+  - 08-api.mdc - FastAPI endpoints
+  - 09-external.mdc - внешние сервисы
+
+- **README.md** - навигация по модулям
+- **telegram-bot.cursorrules** - entry point
+
+### 🔧 Changed
+- Разбили монолитный файл (3000+ строк)
+- Организовали по категориям
+- Добавили cross-references
+
+---
+
+## [2.2.1] - 2025-10-11
+
+### ✨ Added
+- RAG команды в Telegram Bot
+  - `/ask` - RAG-поиск
+  - `/search` - гибридный поиск
+  - `/recommend` - рекомендации
+  - `/digest` - AI-дайджесты
+
+- Обогащение данных
+  - Автоматическое извлечение из ссылок (Crawl4AI)
+  - Поле `enriched_content`
+  - Миграция `add_enriched_content.py`
+
+### 📝 Improved
+- Реорганизация документации (72 → 50 файлов)
+- Очистка корня telethon/ (11 → 3 MD)
+- Создан `docs/archive/`
+
+---
+
+## [2.2.0] - 2025-10-10
+
+### ✨ Added
+- **RAG System** - векторный поиск и AI-генерация
+- **AI-дайджесты** с персонализацией
+- **Интеграции**
+  - Qdrant (векторная БД)
+  - Redis (cache)
+  - Searxng (метапоисковик)
+  - Crawl4AI (скрапинг)
+  - Ollama (локальные LLM)
+
+- **Микросервисная архитектура**
+  - telethon (API + Parser)
+  - telethon-bot (standalone bot)
+  - rag-service (AI/RAG)
+  - gpt2giga-proxy (GigaChat)
+
+- **Event-Driven Architecture**
+  - Webhooks для n8n/Flowise
+  - Background tasks
+
+### 🔧 Changed
+- Graceful degradation с fallback chains
+- Circuit breaker для внешних сервисов
+- Redis кеширование embeddings (24h TTL)
+- Batch indexing в Qdrant
+
+### 📝 Improved
+- Best Practices (10 секций)
+- Comprehensive health checks
+- Prometheus metrics
+- Structured logging
+
+---
+
+## [2.1.0] - 2025-10-09
+
+### ✨ Added
+- **Development helper** - `scripts/utils/dev.sh`
+- **Алиасы** для быстрого доступа
+- **gpt2giga-proxy** интеграция
+- **Единая сеть** localai_default
+
+### 🔧 Changed
+- Упрощена конфигурация GigaChat (1 переменная)
+- Исправлены пути в dev.sh
+
+### 📝 Improved
+- Двойной уровень .gitignore
+- Устранены Docker Compose warnings
+
+---
+
+## [2.0.0] - 2025-10-01
+
+### ✨ Initial Release
+- Многопользовательский режим
+- REST API (FastAPI)
+- Автоматический парсинг
+- AI тегирование (OpenRouter)
+- Retention система
+- Безопасная аутентификация
+
+---
+
+**Формат версионирования:** Semantic Versioning (MAJOR.MINOR.PATCH)
+
+- **MAJOR** - breaking changes
+- **MINOR** - новые функции (backward compatible)
+- **PATCH** - bug fixes

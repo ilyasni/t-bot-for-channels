@@ -1,0 +1,60 @@
+[run]
+# Источники для измерения coverage
+source = .
+omit =
+    # Тесты
+    tests/*
+    # Миграции
+    scripts/migrations/*
+    scripts/setup/*
+    scripts/utils/*
+    # Виртуальное окружение
+    venv/*
+    .venv/*
+    env/*
+    # Генерируемые файлы
+    */__pycache__/*
+    *.pyc
+    # Конфигурация
+    setup.py
+    # Standalone скрипты
+    bot_standalone.py
+    bot_debug.py
+    # Устаревшие/deprecated файлы
+    auth_web_server.py
+    secure_auth_manager.py
+
+[report]
+# Минимальный процент покрытия
+precision = 2
+show_missing = True
+skip_covered = False
+
+# Исключить из отчета
+exclude_lines =
+    # Стандартные исключения
+    pragma: no cover
+    def __repr__
+    raise AssertionError
+    raise NotImplementedError
+    if __name__ == .__main__.:
+    if TYPE_CHECKING:
+    @abstractmethod
+    @abc.abstractmethod
+    # Логирование
+    logger\.debug
+    logger\.info
+    # Защитные проверки
+    except ImportError:
+    except Exception as e:
+    pass
+
+[html]
+directory = htmlcov
+title = Telegram Parser Test Coverage
+
+[paths]
+source = 
+    .
+    */telethon
+

@@ -1,0 +1,537 @@
+---
+title: "Admin Panel & Roles"
+description: "Админ панель через Mini App, роли, подписки, управление пользователями"
+tags: ["admin", "roles", "subscriptions", "mini-app"]
+version: "3.3"
+ruleType: "autoAttached"
+priority: medium
+scope:
+  - "telethon/admin*.py"
+  - "telethon/*admin*.py"
+---
+
+# Admin Panel & Roles
+
+> **Rule Type:** Auto-Attached  
+> **Lines:** < 500 (optimized)  
+> **Priority:** Medium
+
+## 🎯 High-Level Overview
+
+**Admin Panel** (v3.3) — SPA через Telegram Mini App для управления системой.
+
+**Essential Features:**
+- 👥 Управление пользователями
+- 🎫 Создание invite codes
+- 📈 Статистика и аналитика
+- 💎 Управление подписками
+- 🎨 Темная тема support
+
+**Critical Pattern:**
+```python
+# ✅ ВСЕГДА проверяйте admin role
+if user.role != "admin":
+    raise HTTPException(403, "Unauthorized")
+
+# ❌ НИКОГДА не доверяйте frontend
+# Frontend может быть модифицирован!
+```
+
+## 👑 Roles & Subscriptions
+
+### User Roles
+
+```python
+# models.py
+class User(Base):
+    role = Column(String, default="user")  # admin, user
+    subscription_type = Column(String, default="free")
+    subscription_expires = Column(DateTime(timezone=True), nullable=True)
+    max_channels = Column(Integer, default=3)
+    invited_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    
+    def is_admin(self) -> bool:
+        return self.role == "admin"
+```
+
+### Subscription Tiers
+
+```python
+# subscription_config.py
+SUBSCRIPTION_TIERS = {
+    "free": {
+        "max_channels": 3,
+        "max_posts_per_day": 100,
+        "rag_queries_per_day": 10,
+        "ai_digest": False,
+        "price_rub": 0
+    },
+    "trial": {
+        "max_channels": 10,
+        "duration_days": 7,
+        "max_posts_per_day": 500,
+        "rag_queries_per_day": 30,
+        "ai_digest": True,
+        "price_rub": 0
+    },
+    "basic": {
+        "max_channels": 10,
+        "max_posts_per_day": 500,
+        "rag_queries_per_day": 50,
+        "ai_digest": True,
+        "price_rub": 299
+    },
+    "premium": {
+        "max_channels": 50,
+        "max_posts_per_day": 2000,
+        "rag_queries_per_day": 200,
+        "ai_digest": True,
+        "price_rub": 999
+    },
+    "enterprise": {
+        "max_channels": 999,
+        "max_posts_per_day": 999999,
+        "rag_queries_per_day": 999999,
+        "ai_digest": True,
+        "price_rub": 4999
+    }
+}
+```
+
+### Invite Codes
+
+```python
+# models.py
+class InviteCode(Base):
+    __tablename__ = "invite_codes"
+    
+    code = Column(String, primary_key=True)
+    created_by = Column(Integer, ForeignKey("users.id"))
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    max_uses = Column(Integer, default=1)
+    uses_count = Column(Integer, default=0)
+    default_subscription = Column(String, default="free")
+    default_trial_days = Column(Integer, default=0)
+    
+    @staticmethod
+    def generate_code() -> str:
+        """Генерирует 12-символьный код: ABC123XYZ456"""
+        import random
+        import string
+        return ''.join(
+            random.choices(string.ascii_uppercase + string.digits, k=12)
+        )
+    
+    def is_valid(self) -> bool:
+        """Проверка валидности"""
+        now = datetime.now(timezone.utc)
+        return (
+            self.uses_count < self.max_uses and
+            self.expires_at > now
+        )
+```
+
+### Subscription History
+
+```python
+# models.py
+class SubscriptionHistory(Base):
+    __tablename__ = "subscription_history"
+    
+    id = Column(BigInteger, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    action = Column(String)  # created, upgraded, downgraded, renewed
+    old_type = Column(String, nullable=True)
+    new_type = Column(String)
+    changed_by = Column(Integer, ForeignKey("users.id"))  # admin.id
+    changed_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    notes = Column(String, nullable=True)
+```
+
+## 🎨 Admin Panel Manager
+
+### Session Management
+
+```python
+# admin_panel_manager.py
+import redis
+import json
+import uuid
+from datetime import datetime, timezone, timedelta
+
+class AdminPanelManager:
+    def __init__(self):
+        self.redis_client = redis.Redis(
+            host=os.getenv("REDIS_HOST", "redis"),
+            port=int(os.getenv("REDIS_PORT", 6379)),
+            decode_responses=True
+        )
+        self.session_ttl = 3600  # 1 час
+    
+    def create_admin_session(self, telegram_id: int) -> Optional[str]:
+        """
+        Создать admin session
+        
+        Returns:
+            session_token для доступа к Admin Panel
+        """
+        # Проверяем роль
+        db = SessionLocal()
+        user = db.query(User).filter(User.telegram_id == telegram_id).first()
+        
+        if not user or user.role != "admin":
+            db.close()
+            return None
+        
+        db.close()
+        
+        # Генерируем token
+        session_token = str(uuid.uuid4())
+        
+        # Сохраняем в Redis
+        session_data = {
+            "telegram_id": telegram_id,
+            "user_id": user.id,
+            "expires": (
+                datetime.now(timezone.utc) + timedelta(seconds=self.session_ttl)
+            ).isoformat()
+        }
+        
+        self.redis_client.setex(
+            f"admin_session:{session_token}",
+            self.session_ttl,
+            json.dumps(session_data)
+        )
+        
+        return session_token
+    
+    def verify_admin_session(self, token: str, admin_id: int) -> bool:
+        """Проверить admin session"""
+        session_json = self.redis_client.get(f"admin_session:{token}")
+        
+        if not session_json:
+            return False
+        
+        session = json.loads(session_json)
+        
+        if session.get("telegram_id") != admin_id:
+            return False
+        
+        # Проверяем expires (timezone-aware!)
+        expires = datetime.fromisoformat(session["expires"])
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+        
+        if datetime.now(timezone.utc) > expires:
+            return False
+        
+        return True
+```
+
+## 🛡️ Security Decorator
+
+```python
+# main.py
+from functools import wraps
+from fastapi import HTTPException
+
+def require_admin(func):
+    """
+    Декоратор для защиты admin endpoints
+    """
+    @wraps(func)
+    async def wrapper(*args, **kwargs):
+        admin_id = kwargs.get('admin_id')
+        token = kwargs.get('token')
+        
+        if not admin_panel_manager.verify_admin_session(token, admin_id):
+            raise HTTPException(
+                status_code=403,
+                detail="Unauthorized: Invalid or expired session"
+            )
+        
+        return await func(*args, **kwargs)
+    
+    return wrapper
+```
+
+## 🌐 Admin API Endpoints
+
+### Users Management
+
+```python
+# List users
+@app.get("/api/admin/users")
+@require_admin
+async def get_users_api(
+    admin_id: int,
+    token: str,
+    role: Optional[str] = None,
+    subscription: Optional[str] = None,
+    search: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+    db: Session = Depends(get_db)
+):
+    """Получить список пользователей с фильтрами"""
+    query = db.query(User)
+    
+    if role:
+        query = query.filter(User.role == role)
+    if subscription:
+        query = query.filter(User.subscription_type == subscription)
+    if search:
+        query = query.filter(User.username.ilike(f"%{search}%"))
+    
+    users = query.limit(limit).offset(offset).all()
+    total = query.count()
+    
+    return {
+        "users": [serialize_user(u) for u in users],
+        "total": total
+    }
+
+# Update role
+@app.post("/api/admin/user/{user_id}/role")
+@require_admin
+async def update_user_role(
+    user_id: int,
+    admin_id: int,
+    token: str,
+    role: str,  # "admin" or "user"
+    db: Session = Depends(get_db)
+):
+    """Изменить роль пользователя"""
+    user = db.query(User).filter(User.id == user_id).first()
+    
+    if not user:
+        raise HTTPException(404, "User not found")
+    
+    if role not in ["admin", "user"]:
+        raise HTTPException(400, "Invalid role")
+    
+    old_role = user.role
+    user.role = role
+    
+    # Audit log
+    admin = db.query(User).filter(User.telegram_id == admin_id).first()
+    history = SubscriptionHistory(
+        user_id=user.id,
+        action="role_changed",
+        old_type=old_role,
+        new_type=role,
+        changed_by=admin.id,
+        notes=f"Role changed via Admin Panel"
+    )
+    db.add(history)
+    db.commit()
+    
+    return {"status": "success", "user": serialize_user(user)}
+
+# Update subscription
+@app.post("/api/admin/user/{user_id}/subscription")
+@require_admin
+async def update_user_subscription(
+    user_id: int,
+    admin_id: int,
+    token: str,
+    subscription_type: str,
+    duration_days: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """Изменить подписку пользователя"""
+    user = db.query(User).filter(User.id == user_id).first()
+    
+    if not user:
+        raise HTTPException(404, "User not found")
+    
+    if subscription_type not in SUBSCRIPTION_TIERS:
+        raise HTTPException(400, "Invalid subscription type")
+    
+    old_subscription = user.subscription_type
+    user.subscription_type = subscription_type
+    
+    # Update max_channels
+    tier = SUBSCRIPTION_TIERS[subscription_type]
+    user.max_channels = tier["max_channels"]
+    
+    # Set expiry
+    if duration_days:
+        user.subscription_expires = (
+            datetime.now(timezone.utc) + timedelta(days=duration_days)
+        )
+    
+    # Audit log
+    admin = db.query(User).filter(User.telegram_id == admin_id).first()
+    history = SubscriptionHistory(
+        user_id=user.id,
+        action="upgraded" if tier["price_rub"] > 0 else "downgraded",
+        old_type=old_subscription,
+        new_type=subscription_type,
+        changed_by=admin.id,
+        notes=f"Changed via Admin Panel"
+    )
+    db.add(history)
+    db.commit()
+    
+    return {"status": "success", "user": serialize_user(user)}
+```
+
+### Invite Codes API
+
+```python
+# Create invite
+@app.post("/api/admin/invite/create")
+@require_admin
+async def create_invite_code(
+    admin_id: int,
+    token: str,
+    max_uses: int = 1,
+    duration_days: int = 7,
+    default_subscription: str = "free",
+    default_trial_days: int = 0,
+    db: Session = Depends(get_db)
+):
+    """Создать новый invite code"""
+    admin = db.query(User).filter(User.telegram_id == admin_id).first()
+    
+    code = InviteCode.generate_code()
+    
+    invite = InviteCode(
+        code=code,
+        created_by=admin.id,
+        expires_at=datetime.now(timezone.utc) + timedelta(days=duration_days),
+        max_uses=max_uses,
+        default_subscription=default_subscription,
+        default_trial_days=default_trial_days
+    )
+    
+    db.add(invite)
+    db.commit()
+    
+    return {
+        "status": "success",
+        "invite": {
+            "code": code,
+            "expires_at": invite.expires_at.isoformat(),
+            "max_uses": max_uses
+        }
+    }
+
+# List invites
+@app.get("/api/admin/invites")
+@require_admin
+async def get_invites(
+    admin_id: int,
+    token: str,
+    active_only: bool = False,
+    db: Session = Depends(get_db)
+):
+    """Список invite codes"""
+    query = db.query(InviteCode)
+    
+    if active_only:
+        now = datetime.now(timezone.utc)
+        query = query.filter(
+            InviteCode.expires_at > now,
+            InviteCode.uses_count < InviteCode.max_uses
+        )
+    
+    invites = query.all()
+    
+    return {"invites": [serialize_invite(i) for i in invites]}
+```
+
+## ✅ Verification Checklist
+
+- [ ] All admin endpoints use `@require_admin` decorator
+- [ ] Admin sessions stored in Redis (1h TTL)
+- [ ] Session verification checks `admin_id` match
+- [ ] Subscription changes logged in `SubscriptionHistory`
+- [ ] Invite codes validated before use
+- [ ] Admin role checked in database (not from frontend!)
+- [ ] Timezone-aware datetime for `expires_at`
+- [ ] Audit logs include `changed_by` (admin user.id, NOT telegram_id)
+
+## ❌ Deprecated Patterns
+
+**NEVER do this:**
+
+```python
+# ❌ Trust frontend without verification
+@app.post("/api/admin/users")
+async def get_users(admin_id: int):  # NO! No session verification!
+    return db.query(User).all()
+
+# ❌ Use telegram_id in audit log
+history = SubscriptionHistory(
+    changed_by=admin_telegram_id  # NO! Use user.id!
+)
+
+# ❌ No expiry check
+invite = db.query(InviteCode).filter(InviteCode.code == code).first()
+# Missing: invite.is_valid() check!
+
+# ❌ Naive datetime
+invite.expires_at = datetime.now()  # NO! Use timezone.utc!
+
+# ❌ No session expiry
+session_data = {"admin_id": 123}  # NO! Add expires!
+redis_client.set(f"admin_session:{token}", json.dumps(session_data))
+```
+
+## 🎯 Quick Examples
+
+### ✅ Correct
+
+```python
+# Admin decorator
+@app.get("/api/admin/users")
+@require_admin
+async def get_users(admin_id: int, token: str):
+    pass
+
+# Session with TTL
+redis_client.setex(f"admin_session:{token}", 3600, json.dumps(data))
+
+# Audit log
+history = SubscriptionHistory(
+    user_id=user.id,
+    changed_by=admin.id  # user.id, not telegram_id!
+)
+
+# Invite validation
+if not invite.is_valid():
+    raise HTTPException(400, "Invalid invite")
+
+# Timezone-aware
+expires = datetime.now(timezone.utc) + timedelta(days=7)
+```
+
+### ❌ Bad
+
+```python
+# No protection
+@app.get("/api/admin/users")
+async def get_users():
+    pass
+
+# No TTL
+redis_client.set(f"admin_session:{token}", data)
+
+# No audit
+user.role = "admin"  # No history!
+
+# No validation
+user = create_user(invite.code)  # No is_valid() check!
+
+# Naive datetime
+expires = datetime.now() + timedelta(days=7)
+```
+
+## 📚 Related Rules
+
+- `01-core.mdc` — Timezone-aware datetime
+- `03-database.mdc` — Models, Redis sessions
+- `05-security.mdc` — Sessions, authentication
+- `08-api.mdc` — FastAPI endpoints patterns

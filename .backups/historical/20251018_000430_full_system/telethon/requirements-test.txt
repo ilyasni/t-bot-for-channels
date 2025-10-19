@@ -1,0 +1,38 @@
+# Зависимости для тестирования
+# Установка: pip install -r requirements-test.txt
+
+# Core testing framework
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+pytest-mock>=3.11.0
+pytest-cov>=4.1.0
+
+# HTTP mocking  
+# pytest-httpx убран из-за конфликта версий с python-telegram-bot
+# Используем pytest-mock + responses для моков HTTP
+responses>=0.24.0
+
+# Database testing (Unit тесты используют SQLite in-memory)
+# pytest-postgresql убран - требует libpq, используем только fakeredis
+fakeredis>=2.20.0
+
+# Factories для тестовых данных
+factory-boy>=3.3.0
+
+# Дополнительные утилиты
+pytest-xdist>=3.5.0  # Параллельный запуск тестов
+pytest-timeout>=2.2.0  # Timeout для тестов
+pytest-env>=1.1.0  # Environment variables для тестов
+
+# Code quality
+ruff>=0.1.0  # Linter
+mypy>=1.7.0  # Type checker
+black>=23.12.0  # Code formatter
+
+# Coverage отчеты
+coverage[toml]>=7.3.0
+pytest-html>=4.1.0  # HTML отчеты
+
+# Debugging
+# pytest-pudb>=0.7.0  # Убран - несовместим с pytest 8.x
+

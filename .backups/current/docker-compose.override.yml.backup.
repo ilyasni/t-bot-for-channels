@@ -1,0 +1,169 @@
+services:
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_PROVISIONING_PATH=/etc/grafana/provisioning
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
+    networks:
+      - default
+
+  telethon:
+    env_file:
+      - ./telethon/.env
+    build:
+      context: ./telethon
+      dockerfile: Dockerfile.telethon
+    container_name: telethon
+
+    ports:
+      - "8010:8010"
+      - "8001:8001"
+    volumes:
+      # Монтируем сессии Telegram для сохранения аутентификации
+      - ./telethon/sessions:/app/sessions
+      # Монтируем базу данных для сохранения данных
+      - ./telethon/data:/app/data
+      # Монтируем логи
+      - ./telethon/logs:/app/logs
+      # Монтируем .env файл
+      - ./telethon/.env:/app/.env
+    environment:
+      # Переменные окружения (будут переопределены из .env файла)
+      - HOST=0.0.0.0
+      - PORT=8010
+      - PARSER_INTERVAL_MINUTES=30
+      # База данных - ТОЛЬКО PostgreSQL (Supabase)
+      - TELEGRAM_DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/postgres
+      # Telegram Bot Token
+      - BOT_TOKEN=${BOT_TOKEN}
+      # Ключ шифрования (общий для всего проекта)
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      # Master credentials для упрощенной авторизации
+      - MASTER_API_ID=${MASTER_API_ID}
+      - MASTER_API_HASH=${MASTER_API_HASH}
+      - ADMIN_TELEGRAM_IDS=${ADMIN_TELEGRAM_IDS}
+      # Система хранения постов
+      - DEFAULT_RETENTION_DAYS=${DEFAULT_RETENTION_DAYS:-30}
+      - CLEANUP_SCHEDULE_TIME=${CLEANUP_SCHEDULE_TIME:-03:00}
+      # Tagging (AI) настройки
+      # GigaChat - основной провайдер, OpenRouter - fallback
+      - TAGGING_PROVIDER=${TAGGING_PROVIDER:-gigachat}
+      - TAGGING_FALLBACK_OPENROUTER=${TAGGING_FALLBACK_OPENROUTER:-true}
+      - GIGACHAT_PROXY_URL=http://gpt2giga-proxy:8090
+      - GIGACHAT_MODEL=${GIGACHAT_MODEL:-GigaChat}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - OPENROUTER_MODEL=${OPENROUTER_MODEL:-deepseek/deepseek-chat-v3.1:free}
+      # Base URL для Mini App (QR авторизация)
+      - AUTH_BASE_URL=${AUTH_BASE_URL:-https://telegram-auth.produman.studio}
+      # Debug Settings
+      - DEBUG_LOGS=${DEBUG_LOGS:-false}
+      # Redis (для QR сессий shared между контейнерами)
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      # REDIS_PASSWORD не установлен - Valkey без пароля
+      # Часовой пояс
+      - TZ=Europe/Moscow
+    restart: unless-stopped
+    networks:
+      - localai_default
+
+  # telethon-bot: УДАЛЕН в v3.1.1 - бот теперь работает внутри telethon контейнера
+  # После объединения контейнеров, telethon запускает run_system.py который включает:
+  #   - Telegram Bot (async)
+  #   - FastAPI Server (порт 8010)
+  #   - Auth Web Server (порт 8001)
+  #   - Parser Service (автоматический парсинг)
+  # Standalone bot_standalone.py больше не нужен (вызывал конфликт getUpdates)
+
+  gpt2giga-proxy:
+    build:
+      context: ./gpt2giga
+      dockerfile: Dockerfile.gpt2giga
+    container_name: gpt2giga-proxy
+    ports:
+      - "8090:8090"
+    environment:
+      # GigaChat API credentials (get from Sber)
+      - GIGACHAT_CREDENTIALS=${GIGACHAT_CREDENTIALS}
+      - PROXY_HOST=0.0.0.0
+      # Модель по умолчанию (если клиент не передает свою)
+      - GIGACHAT_MODEL=${GIGACHAT_MODEL:-GigaChat-Lite}
+      # Разрешить клиентам передавать свою модель (tagging_service передает GigaChat-Lite, ai_digest передает GigaChat)
+      - GPT2GIGA_PASS_MODEL=true
+      # Модель для embeddings
+      - GPT2GIGA_EMBEDDINGS=EmbeddingsGigaR
+      # SSL настройки для GigaChat API (с сертификатами Минцифры)
+      - GIGACHAT_VERIFY_SSL_CERTS=true
+      - GIGACHAT_BASE_URL=https://gigachat.devices.sberbank.ru/api/v1
+      # Дополнительные SSL настройки для gpt2giga
+      - GPT2GIGA_VERIFY_SSL_CERTS=true
+    restart: unless-stopped
+    networks:
+      - localai_default
+
+  rag-service:
+    build:
+      context: ./telethon/rag_service
+      dockerfile: Dockerfile.rag
+    container_name: rag-service
+    ports:
+      - "8020:8020"
+    volumes:
+      - ./telethon/rag_service:/app
+      - ./telethon/data:/app/data
+      - ./telethon/logs:/app/logs
+      - ./telethon/database.py:/app/database.py
+      - ./telethon/models.py:/app/models.py
+      - ./telethon/crypto_utils.py:/app/crypto_utils.py
+      - ./telethon/evaluation:/app/evaluation
+      - ./telethon/observability:/app/observability
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8020
+      - TELEGRAM_DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/postgres
+      - QDRANT_URL=http://qdrant:6333
+      - QDRANT_API_KEY=${QDRANT_API_KEY}
+      - QDRANT_EXTERNAL_URL=https://qdrant.produman.studio
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - OPENROUTER_MODEL=${OPENROUTER_MODEL:-deepseek/deepseek-chat-v3.1:free}
+      - GIGACHAT_PROXY_URL=http://gpt2giga-proxy:8090
+      - GIGACHAT_ENABLED=true
+      - BOT_TOKEN=${BOT_TOKEN}
+      - EMBEDDING_MAX_TOKENS_GIGACHAT=1536
+      - EMBEDDING_OVERLAP_TOKENS_GIGACHAT=256
+      - RAG_TOP_K=10
+      - RAG_MIN_SCORE=0.7
+      - RAG_CONTEXT_WINDOW=4000
+      - RAG_TEMPERATURE=0.3
+      # Searxng для веб-поиска
+      - SEARXNG_ENABLED=${SEARXNG_ENABLED:-true}
+      - SEARXNG_URL=${SEARXNG_URL:-https://searxng.produman.studio}
+      - SEARXNG_USER=${SEARXNG_USER}
+      - SEARXNG_PASSWORD=${SEARXNG_PASSWORD}
+      - SEARXNG_MAX_RESULTS=${SEARXNG_MAX_RESULTS:-5}
+      - TZ=Europe/Moscow
+      # Hybrid Search (Neo4j + Qdrant RAG)
+      - USE_HYBRID_SEARCH=${USE_HYBRID_SEARCH:-true}
+      - HYBRID_SEARCH_PERCENTAGE=${HYBRID_SEARCH_PERCENTAGE:-100}
+      # Langfuse для evaluation и tracing
+      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY}
+      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY}
+      - LANGFUSE_HOST=${LANGFUSE_HOST}
+    restart: unless-stopped
+    depends_on:
+      telethon:
+        condition: service_started
+      gpt2giga-proxy:
+        condition: service_started
+    networks:
+      - default
+      - localai_default
+
+networks:
+  localai_default:
+    external: true
