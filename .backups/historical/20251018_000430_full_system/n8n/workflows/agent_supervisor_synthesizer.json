@@ -1,0 +1,152 @@
+{
+  "name": "Agent: Supervisor Synthesizer",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "execute-workflow-trigger",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        250,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Prepare HTTP Request data for supervisor synthesis\nconst items = $input.all();\nconst data = items[0].json;\n\nconst assessment = data.assessment || {};\nconst topics = data.topics || [];\nconst emotions = data.emotions || {};\nconst speakers = data.speakers || {};\nconst keyMoments = data.key_moments || [];\nconst summary = data.summary || \"\";\nconst timeline = data.timeline || [];\nconst externalContext = data.external_context || [];\nconst linkSummaries = data.link_summaries || [];\n\nconst detailLevel = assessment.detail_level || \"standard\";\nconst dialogueType = assessment.dialogue_type || \"casual_chat\";\nconst messageCount = assessment.message_count || 0;\nconst hours = data.hours || 24;\nconst groupTitle = data.group_title || \"Группа\";\n\n// === BUILD ADAPTIVE SYNTHESIS PROMPT ===\n\nlet promptTemplate = \"\";\n\nif (detailLevel === \"micro\") {\n  promptTemplate = `Создай МИКРО дайджест (1 предложение + эмодзи).\\n\\nЭМОЦИОНАЛЬНЫЙ ТОН: ${emotions.tone || 'neutral'}\\n\\nРЕЗЮМЕ: ${summary}\\n\\nВерни JSON:\\n{\\n  \"digest\": \"${emotions.tone}\\\\n\\\\n${summary}\"\\n}`;\n  \n} else if (detailLevel === \"minimal\") {\n  promptTemplate = `Создай МИНИМАЛЬНЫЙ дайджест (темы + тон + параграф).\\n\\nГРУППА: ${groupTitle}\\nПЕРИОД: ${hours} часов\\nСООБЩЕНИЙ: ${messageCount}\\n\\nТЕМЫ:\\n${topics.map(t => `- ${t.name}`).join('\\n')}\\n\\nЭМОЦИОНАЛЬНЫЙ ТОН:\\n- Общий: ${emotions.overall_tone || 'neutral'}\\n- Атмосфера: ${emotions.atmosphere || ''}\\n\\nРЕЗЮМЕ:\\n${summary}\\n\\nСоздай структурированный дайджест. Используй \\\\n для переносов (НЕ <br>!)\\n\\nФОРМАТ JSON (ОБРАТИ ВНИМАНИЕ на \\\\n\\\\n между секциями!):\\n{\\n  \"digest\": \"📊 Дайджест: ${hours}ч | ${messageCount} сообщений\\\\n\\\\n🎯 Темы:\\\\n1. Первая тема\\\\n2. Вторая тема\\\\n\\\\n😊 Тон: описание\\\\n\\\\n📝 Суть:\\\\nРезюме одним параграфом\"\\n}\\n\\nВАЖНО: Между каждой секцией (📊, 🎯, 😊, 📝) ставь \\\\n\\\\n для читаемости!`;\n  \n} else if (detailLevel === \"standard\") {\n  promptTemplate = `Создай СТАНДАРТНЫЙ дайджест (полный анализ).\\n\\nГРУППА: ${groupTitle}\\nПЕРИОД: ${hours} часов | ${messageCount} сообщений\\nТИП ДИАЛОГА: ${dialogueType}\\n\\n=== ДАННЫЕ ОТ АГЕНТОВ ===\\n\\nТЕМЫ:\\n${JSON.stringify(topics, null, 2)}\\n\\nЭМОЦИОНАЛЬНЫЙ АНАЛИЗ:\\n${JSON.stringify(emotions, null, 2)}\\n\\nУЧАСТНИКИ:\\n${JSON.stringify(speakers, null, 2)}\\n\\nКЛЮЧЕВЫЕ МОМЕНТЫ:\\n${JSON.stringify(keyMoments, null, 2)}\\n\\nРЕЗЮМЕ:\\n${summary}\\n\\n=== ЗАДАЧА ===\\n\\nСинтезируй дайджест в формате. ВАЖНО: Используй \\\\n\\\\n между КАЖДОЙ секцией для читаемости!\\n\\nПРИМЕР СТРУКТУРЫ:\\n📊 Дайджест: ...\\\\n\\\\n🎯 Основные темы:\\\\n...\\\\n\\\\n😐 Эмоциональный тон: ...\\\\n\\\\n👥 Участники:\\\\n...\\\\n\\\\n📝 Резюме:\\\\n...\\n\\n📊 Дайджест: [группа] | [период] | [сообщений]\\n📋 Тип: [тип] | Уровень: standard\\n\\n🎯 Основные темы:\\n[перечисли темы с приоритетами и эмодзи]\\n\\n😐 Эмоциональный тон: [описание + интенсивность]\\n   Атмосфера: [атмосфера]\\n   ${emotions.indicators ? 'Индикаторы: [conflict/collaboration/stress/enthusiasm с %]' : ''}\\n\\n👥 Активные участники:\\n[участники с ролями и эмоц. контекстом]\\n\\n${keyMoments.length > 0 ? '⚡ Ключевые моменты:\\n[моменты с типами, контекстом, участниками, эмоц. контекстом]\\n\\n' : ''}📝 Резюме:\\n[резюме 2-3 параграфа с учетом эмоц. динамики]\\n\\nФОРМАТ: верни JSON с полем \\\"digest\\\" содержащим готовый HTML-форматированный текст с тегами <b>, <i>, <code>, <a>.\\nИспользуй эмодзи для эмоц. тона: 😊 positive, 😐 neutral, 😔 negative, 🟢🟡🟠🔴 для градаций.`;\n  \n} else if (detailLevel === \"detailed\") {\n  promptTemplate = `Создай ДЕТАЛЬНЫЙ дайджест (с хронологией и эмоц. динамикой).\\n\\n[ВСЕ ДАННЫЕ ИЗ STANDARD] +\\n\\nХРОНОЛОГИЯ:\\n${JSON.stringify(timeline, null, 2)}\\n\\nЭМОЦИОНАЛЬНАЯ ПРОГРЕССИЯ:\\n${emotions.emotional_progression || emotions.emotional_arc || ''}\\n\\n=== ДОБАВЬ К STANDARD ФОРМАТУ ===\\n\\n📅 Хронология:\\n[события с временем и эмоциональными эмодзи: 🟢 calm, 🟡 concern, 🟠 tension, 🔵 resolution]\\n\\n📈 Эмоциональная динамика:\\n[эмоциональная прогрессия]\\n${emotions.dominant_emotions ? 'Преобладающие эмоции: [проценты]' : ''}`;\n  \n} else {\n  // Comprehensive\n  promptTemplate = `Создай ПОЛНЫЙ дайджест (comprehensive).\\n\\n[ВСЕ ДАННЫЕ ИЗ DETAILED] +\\n\\nВНЕШНИЙ КОНТЕКСТ:\\nСсылки: ${JSON.stringify(linkSummaries, null, 2)}\\nДоп. исследования: ${JSON.stringify(externalContext, null, 2)}\\n\\n=== ДОБАВЬ К DETAILED ФОРМАТУ ===\\n\\n🔗 Дополнительный контекст:\\n[ссылки и внешние ресурсы]\\n\\n📊 Инсайты:\\n[паттерны и рекомендации на основе всех данных]`;\n}\n\n// Add common instructions\nconst fullPrompt = promptTemplate + `\\\\n\\\\n=== ОБЩИЕ ТРЕБОВАНИЯ ===\\\\n\\\\n⚠️ КРИТИЧЕСКИ ВАЖНО - HTML ТЕГИ:\\\\n- РАЗРЕШЕНЫ ТОЛЬКО: <b>, <i>, <code>, <a href=\\\\\\\"...\\\\\\\"> <blockquote>\\\\n- ЗАПРЕЩЕНЫ: <div>, <br>, <span>, <p>, <ul>, <li>, и ВСЕ другие теги!\\n- НИКОГДА НЕ ИСПОЛЬЗУЙ <br>! Если нужен перенос - используй \\\\n или \\\\n\\\\n\\n- Любой <br> вызовет ошибку парсинга в Telegram\\\\n- Для переносов строк используй \\\\\\\\n вместо <br>\\\\n- НЕ используй container теги\\\\n\\\\n⚠️ КРИТИЧЕСКИ ВАЖНО - USERNAMES:\\\\n- Используй ТОЧНЫЕ usernames из speakers. НЕ заменяй на обобщенные имена\\\\n- НЕ заменяй на \\\\\\\"участник1\\\\\\\", \\\\\\\"User1\\\\\\\" или обобщенные\\\\n- Сохраняй оригинальное написание\\\\n- Ссылки: <a href=\\\\\\\"tg://resolve?domain=username\\\\\\\">@username</a>\\\\n\\\\n3. Эмодзи для акцента\\\\n4. Адаптируй длину под ${detailLevel}\\\\n5. Сохрани эмоциональный контекст\\\\n\\\\nВерни JSON: {\\\\\\\"digest\\\\\\\": \\\\\\\"HTML текст\\\\\\\"}\\\\n\\\\nВАЖНО: ТОЛЬКО валидный JSON!`;\n\n// Build system message\nconst systemMessage = \"Ты - supervisor, создающий финальный дайджест из данных всех агентов. Используй ТОЛЬКО реальные username из данных. ЗАПРЕЩЕНО придумывать имена. Возвращай ТОЛЬКО валидный JSON: {\\\"digest\\\": \\\"...\\\"}\";\n\n// Calculate max_tokens safely\nconst maxTokens = (assessment.token_budgets && assessment.token_budgets.summary) ? assessment.token_budgets.summary : 1500;\n\nreturn [\n  {\n    json: {\n      system_message: systemMessage,\n      user_message: fullPrompt,\n      max_tokens: maxTokens,\n      detail_level: detailLevel,\n      group_title: groupTitle\n    }\n  }\n];"
+      },
+      "id": "prepare-synthesis-prompt",
+      "name": "Prepare Synthesis Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1250,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://gpt2giga-proxy:8090/v1/chat/completions",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\"model\": \"GigaChat-Pro\", \"messages\": [{\"role\": \"system\", \"content\": $json.system_message}, {\"role\": \"user\", \"content\": $json.user_message}], \"temperature\": 0.1, \"max_tokens\": $json.max_tokens, \"response_format\": {\"type\": \"json_object\"}} }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "gigachat-synthesize",
+      "name": "GigaChat: Synthesize Digest",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1450,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse GigaChat response from gpt2giga proxy\nconst response = $input.first().json.choices?.[0]?.message?.content || '{}';\n\nconsole.log('📥 GigaChat response received:', response.substring(0, 100));\n\nreturn [\n  {\n    json: {\n      raw_content: response\n    }\n  }\n];"
+      },
+      "id": "parse-response",
+      "name": "Parse Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1650,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": "utility_json_guardrail",
+        "source": "database",
+        "inputData": {
+          "values": [
+            {
+              "json": {
+                "raw_content": "={{ $json.raw_content }}",
+                "data_type": "digest",
+                "original_messages": "={{ $execution.customData.getAll().original_messages }}"
+              }
+            }
+          ]
+        }
+      },
+      "id": "execute-guardrail",
+      "name": "Execute Guardrail",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [
+        1850,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Prepare Synthesis Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Synthesis Prompt": {
+      "main": [
+        [
+          {
+            "node": "GigaChat: Synthesize Digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GigaChat: Synthesize Digest": {
+      "main": [
+        [
+          {
+            "node": "Parse Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Response": {
+      "main": [
+        [
+          {
+            "node": "Execute Guardrail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "updatedAt": "2025-10-14T19:25:00.000Z",
+  "versionId": "1"
+}

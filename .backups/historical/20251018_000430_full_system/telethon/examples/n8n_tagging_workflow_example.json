@@ -1,0 +1,258 @@
+{
+  "name": "Автоматическое тегирование постов",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        240,
+        300
+      ],
+      "id": "manual-trigger-1",
+      "name": "Запуск вручную"
+    },
+    {
+      "parameters": {
+        "url": "http://telethon:8010/users?authenticated_only=true",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        460,
+        300
+      ],
+      "id": "get-users",
+      "name": "Получить пользователей"
+    },
+    {
+      "parameters": {
+        "url": "=http://telethon:8010/users/{{ $json.users[0].telegram_id }}/posts?hours_back=24",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        680,
+        300
+      ],
+      "id": "get-posts",
+      "name": "Получить посты"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Извлекаем посты из ответа и создаем отдельные элементы\nconst inputData = $input.all();\nconst posts = inputData[0].json.posts;\n\n// Создаем отдельные элементы для каждого поста\nreturn posts.map(post => ({\n  json: {\n    post_id: post.id,\n    channel: post.channel_username,\n    text: post.text,\n    views: post.views,\n    url: post.url,\n    posted_at: post.posted_at,\n    tags: post.tags,\n    has_tags: post.tags !== null && post.tags.length > 0\n  }\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        300
+      ],
+      "id": "split-posts",
+      "name": "Разделить посты"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.has_tags }}",
+              "value2": false
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1120,
+        300
+      ],
+      "id": "check-tags",
+      "name": "Проверить наличие тегов"
+    },
+    {
+      "parameters": {
+        "url": "=http://telethon:8010/posts/{{ $json.post_id }}/generate_tags",
+        "method": "POST",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1340,
+        200
+      ],
+      "id": "generate-tags",
+      "name": "Генерировать теги"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Объединяем данные поста с сгенерированными тегами\nconst items = $input.all();\n\nreturn items.map(item => ({\n  json: {\n    post_id: item.json.post_id,\n    channel: item.json.channel,\n    text: item.json.text,\n    tags: item.json.tags || [],\n    url: item.json.url,\n    status: item.json.status || 'tagged'\n  }\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1560,
+        200
+      ],
+      "id": "format-tagged",
+      "name": "Форматировать результат"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Посты которые уже имеют теги\nconst items = $input.all();\n\nreturn items.map(item => ({\n  json: {\n    post_id: item.json.post_id,\n    channel: item.json.channel,\n    text: item.json.text,\n    tags: item.json.tags,\n    url: item.json.url,\n    status: 'already_tagged'\n  }\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1340,
+        400
+      ],
+      "id": "format-existing",
+      "name": "Уже с тегами"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "multiplex"
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 2.1,
+      "position": [
+        1780,
+        300
+      ],
+      "id": "merge-results",
+      "name": "Объединить результаты"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Группировка постов по тегам\nconst items = $input.all();\nconst tagStats = {};\nconst taggedPosts = [];\n\nfor (const item of items) {\n  const post = item.json;\n  \n  if (post.tags && Array.isArray(post.tags)) {\n    taggedPosts.push(post);\n    \n    for (const tag of post.tags) {\n      if (!tagStats[tag]) {\n        tagStats[tag] = {\n          tag: tag,\n          count: 0,\n          posts: []\n        };\n      }\n      tagStats[tag].count++;\n      tagStats[tag].posts.push({\n        post_id: post.post_id,\n        channel: post.channel,\n        url: post.url\n      });\n    }\n  }\n}\n\n// Возвращаем статистику\nreturn [{\n  json: {\n    total_posts: items.length,\n    tagged_posts: taggedPosts.length,\n    unique_tags: Object.keys(tagStats).length,\n    tag_statistics: Object.values(tagStats).sort((a, b) => b.count - a.count)\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2000,
+        300
+      ],
+      "id": "analyze-tags",
+      "name": "Анализ тегов"
+    }
+  ],
+  "connections": {
+    "Запуск вручную": {
+      "main": [
+        [
+          {
+            "node": "Получить пользователей",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Получить пользователей": {
+      "main": [
+        [
+          {
+            "node": "Получить посты",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Получить посты": {
+      "main": [
+        [
+          {
+            "node": "Разделить посты",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Разделить посты": {
+      "main": [
+        [
+          {
+            "node": "Проверить наличие тегов",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Проверить наличие тегов": {
+      "main": [
+        [
+          {
+            "node": "Генерировать теги",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Уже с тегами",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Генерировать теги": {
+      "main": [
+        [
+          {
+            "node": "Форматировать результат",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Форматировать результат": {
+      "main": [
+        [
+          {
+            "node": "Объединить результаты",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Уже с тегами": {
+      "main": [
+        [
+          {
+            "node": "Объединить результаты",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Объединить результаты": {
+      "main": [
+        [
+          {
+            "node": "Анализ тегов",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  }
+}
+

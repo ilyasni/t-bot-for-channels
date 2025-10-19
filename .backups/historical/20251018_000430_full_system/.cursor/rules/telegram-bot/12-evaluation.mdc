@@ -1,0 +1,336 @@
+---
+title: "LLM Evaluation System"
+description: "Система оценки качества ответов LLM бота с использованием Ragas и golden datasets"
+tags: ["evaluation", "llm", "quality", "ragas", "testing"]
+version: "1.0"
+---
+
+# LLM Evaluation System
+
+## 🎯 Overview
+
+Комплексная система оценки качества ответов Telegram бота с использованием:
+- **Ragas** - framework для оценки RAG систем
+- **Golden Datasets** - эталонные наборы вопросов и ответов
+- **Custom Metrics** - специализированные метрики для Telegram контекста
+- **Prometheus/Grafana** - мониторинг и визуализация результатов
+
+## 🏗️ Architecture
+
+```
+evaluation/
+├── schemas.py              # Pydantic модели данных
+├── golden_dataset_manager.py  # CRUD операции для datasets
+├── bot_evaluator.py        # Логика оценки через Ragas
+├── evaluation_runner.py    # Оркестрация batch evaluations
+├── langfuse_integration.py # Интеграция с Langfuse
+├── metrics.py             # Prometheus метрики
+└── cli.py                 # CLI для управления
+```
+
+## 📊 Data Models
+
+### GoldenDatasetItem
+
+```python
+class GoldenDatasetItem(BaseModel):
+    item_id: str                    # Уникальный ID
+    dataset_name: str               # Название dataset
+    category: str                   # automotive, tech, groups
+    input: Dict[str, Any]          # Входные данные
+    query: str                     # Текст запроса
+    telegram_context: TelegramContext  # Контекст Telegram
+    expected_output: str           # Ожидаемый ответ
+    retrieved_contexts: List[str]  # Retrieved контексты
+    difficulty: DifficultyLevel    # beginner, intermediate, advanced
+    tone: ToneType                # technical, casual, formal
+    requires_multi_source: bool    # Требует синтез из нескольких источников
+```
+
+### TelegramContext
+
+```python
+class TelegramContext(BaseModel):
+    user_id: int
+    channels: List[str]            # Подписанные каналы
+    groups: List[str]              # Участие в группах
+    context_type: ContextType      # single_channel, multi_channel, group_discussion
+    message_history: List[str]     # История сообщений
+```
+
+## 🧮 Evaluation Metrics
+
+### Standard Ragas Metrics
+
+```python
+# Стандартные метрики Ragas
+AnswerCorrectness(llm=evaluator_llm)      # Правильность ответа
+Faithfulness(llm=evaluator_llm)           # Верность контексту
+ContextRelevance(llm=evaluator_llm)       # Релевантность контекста
+FactualCorrectness(llm=evaluator_llm)     # Фактическая точность
+```
+
+### Custom Telegram Metrics
+
+```python
+# Специализированные метрики для Telegram
+ChannelContextAwareness      # Понимание специфики канала
+GroupSynthesisQuality        # Качество синтеза из групп
+MultiSourceCoherence         # Связность при множественных источниках
+ToneAppropriateness          # Уместность тона для контекста
+```
+
+## 🔧 Usage Patterns
+
+### 1. Creating Golden Datasets
+
+```python
+# Через CLI
+python -m evaluation.cli create-dataset --name automotive_qa --file data/automotive_qa.json
+
+# Через API
+POST /evaluation/datasets
+{
+    "name": "automotive_qa",
+    "items": [...]
+}
+```
+
+### 2. Running Evaluations
+
+```python
+# Через Telegram команды (Admin)
+/evaluate automotive_qa run_2024_01_15
+
+# Через CLI
+python -m evaluation.cli run-evaluation --dataset automotive_qa --run-name test_run
+
+# Через API
+POST /evaluation/batch
+{
+    "dataset_name": "automotive_qa",
+    "run_name": "test_run",
+    "model_provider": "openrouter",
+    "model_name": "gpt-4o-mini"
+}
+```
+
+### 3. Monitoring Results
+
+```python
+# Статус evaluation run
+GET /evaluation/status/{run_id}
+
+# Результаты
+GET /evaluation/results/{run_id}
+
+# Статистика dataset
+python -m evaluation.cli dataset-stats --dataset automotive_qa
+```
+
+## 🎯 Best Practices
+
+### 1. Dataset Creation
+
+```python
+# ✅ Хорошо - разнообразные примеры
+{
+    "item_id": "auto_001",
+    "category": "automotive",
+    "query": "Какие новые электромобили в 2024?",
+    "difficulty": "beginner",
+    "tone": "technical",
+    "requires_multi_source": False
+}
+
+# ❌ Плохо - слишком специфично
+{
+    "item_id": "auto_001", 
+    "query": "Что думает Илон Маск про Cybertruck?",
+    "difficulty": "expert",
+    "requires_multi_source": True
+}
+```
+
+### 2. Metric Selection
+
+```python
+# ✅ Для single channel queries
+metrics = [
+    AnswerCorrectness,
+    ChannelContextAwareness,
+    ToneAppropriateness
+]
+
+# ✅ Для multi-source queries  
+metrics = [
+    AnswerCorrectness,
+    MultiSourceCoherence,
+    GroupSynthesisQuality
+]
+```
+
+### 3. Error Handling
+
+```python
+# ✅ Graceful degradation
+try:
+    result = await evaluator.evaluate_item(...)
+except RagasEvaluationError as e:
+    logger.warning(f"Ragas evaluation failed: {e}")
+    return {"overall_score": 0.0, "error": str(e)}
+```
+
+## 📈 Monitoring & Metrics
+
+### Prometheus Metrics
+
+```python
+# Score distributions
+evaluation_answer_correctness_histogram
+evaluation_faithfulness_histogram
+evaluation_context_relevance_histogram
+
+# Run statistics
+evaluation_runs_total_counter
+evaluation_duration_seconds_histogram
+evaluation_items_processed_counter
+```
+
+### Grafana Dashboard
+
+- **Evaluation Overview**: Общая статистика по runs
+- **Score Distributions**: Распределение оценок по метрикам
+- **Performance Trends**: Тренды качества во времени
+- **Error Analysis**: Анализ ошибок и failures
+
+## 🔄 Integration Points
+
+### 1. Langfuse Integration
+
+```python
+# Автоматическое логирование в Langfuse
+await langfuse_client.log_evaluation_result(
+    trace_id=langfuse_trace_id,
+    scores=evaluation_scores,
+    metadata=evaluation_metadata
+)
+```
+
+### 2. Admin Commands
+
+```python
+# Telegram admin команды
+/evaluate <dataset> <run_name> [model_provider] [model_name]
+/evaluate_status [run_name]
+/evaluate_results <run_name>
+/evaluate_datasets
+```
+
+### 3. FastAPI Endpoints
+
+```python
+# REST API для integration
+POST /evaluation/batch
+GET /evaluation/status/{run_id}
+GET /evaluation/results/{run_id}
+GET /evaluation/datasets
+```
+
+## 🧪 Testing Strategy
+
+### Unit Tests
+
+```python
+# Тестирование схем
+def test_golden_dataset_item_validation():
+    # Проверка валидации Pydantic моделей
+
+# Тестирование manager
+async def test_golden_dataset_manager_crud():
+    # CRUD операции с мокированием DB
+
+# Тестирование evaluator
+async def test_bot_evaluator_with_mocked_ragas():
+    # Мокирование Ragas для unit тестов
+```
+
+### Integration Tests
+
+```python
+# Тестирование полного pipeline
+async def test_evaluation_pipeline():
+    # Создание dataset → evaluation → проверка результатов
+
+# Тестирование API endpoints
+def test_evaluation_api_endpoints():
+    # Тестирование FastAPI endpoints
+```
+
+## 🚨 Common Pitfalls
+
+### 1. Ragas Dependency
+
+```python
+# ✅ Проверка доступности Ragas
+if not RAGAS_AVAILABLE:
+    logger.warning("Ragas not available, using fallback evaluation")
+    return fallback_evaluation()
+
+# ❌ Без проверки
+result = ragas_metric.score(...)  # Может упасть
+```
+
+### 2. Timezone Handling
+
+```python
+# ✅ Timezone-aware timestamps
+created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+# ❌ Naive datetime
+created_at: datetime = Field(default_factory=datetime.now)
+```
+
+### 3. Database Transactions
+
+```python
+# ✅ Proper transaction handling
+async with conn.transaction():
+    await conn.execute("INSERT INTO evaluation_run ...")
+    await conn.execute("INSERT INTO evaluation_result ...")
+
+# ❌ Без транзакций
+await conn.execute("INSERT INTO evaluation_run ...")
+await conn.execute("INSERT INTO evaluation_result ...")  # Может упасть
+```
+
+## 📚 Related Rules
+
+- `03-database.mdc` — PostgreSQL схемы для evaluation
+- `08-api.mdc` — FastAPI endpoints для evaluation
+- `09-external.mdc` — Интеграция с Ragas, Langfuse
+- `04-development.mdc` — Тестирование evaluation системы
+
+## ✅ Verification Checklist
+
+После работы с evaluation системой:
+
+1. **Dataset validation:**
+   - [ ] Все required поля заполнены
+   - [ ] Telegram context корректный
+   - [ ] Difficulty и tone соответствуют контенту
+
+2. **Evaluation setup:**
+   - [ ] Ragas metrics инициализированы
+   - [ ] LLM provider настроен
+   - [ ] Prometheus метрики работают
+
+3. **Results validation:**
+   - [ ] Scores в диапазоне 0.0-1.0
+   - [ ] Langfuse integration работает
+   - [ ] Database записи корректные
+
+4. **Error handling:**
+   - [ ] Graceful degradation при ошибках Ragas
+   - [ ] Proper logging ошибок
+   - [ ] Fallback evaluation доступен

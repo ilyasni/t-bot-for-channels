@@ -1,0 +1,272 @@
+{
+  "name": "Agent: Context Links Analyzer",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "execute-workflow-trigger",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Prepare HTTP Request data for context links extraction\nconst items = $input.all();\nconst data = items[0].json;\n\nconst messagesText = data.messages_text || \"\";\nconst topics = data.topics || [];\nconst assessment = data.assessment || {};\nconst maxTokens = (assessment.token_budgets && assessment.token_budgets.context_links) ? assessment.token_budgets.context_links : 500;\n\n// Build system message\nconst systemMessage = \"Ты эксперт по анализу контекстных ссылок в диалогах. Твоя задача - извлечь и проанализировать ссылки из сообщений. Возвращай ТОЛЬКО валидный JSON: {\\\"context_links\\\": [...]}. ЗАПРЕЩЕНО: markdown, комментарии, придумывание данных.\";\n\n// === BUILD USER MESSAGE ===\n\nconst userMessage = `Проанализируй сообщения и извлеки все ссылки:\\n\\nСообщения:\\n${messagesText}\\n\\nТемы для контекста:\\n${topics.map(t => t.name).join(', ')}\\n\\nИзвлеки ссылки и верни в формате JSON.`;\n\nreturn [\n  {\n    json: {\n      system_message: systemMessage,\n      user_message: userMessage,\n      max_tokens: maxTokens\n    }\n  }\n];"
+      },
+      "id": "prepare-context-links-prompt",
+      "name": "Prepare Context Links Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://gpt2giga-proxy:8000/v1/chat/completions",
+        "authentication": "none",
+        "requestMethod": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyContentType": "json",
+        "jsonBody": "={{ { model: 'GigaChat-Pro', messages: [{ role: 'system', content: $json.system_message }, { role: 'user', content: $json.user_message }], temperature: 0.1, max_tokens: $json.max_tokens, response_format: { type: 'json_object' } } }}",
+        "options": {}
+      },
+      "id": "extract-links",
+      "name": "Extract Links",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse GigaChat response from gpt2giga proxy\nconst response = $input.first().json.choices?.[0]?.message?.content || '{}';\n\nconsole.log('📥 GigaChat response received:', response.substring(0, 100));\n\nreturn [\n  {\n    json: {\n      raw_content: response\n    }\n  }\n];"
+      },
+      "id": "parse-context-links-response",
+      "name": "Parse Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "wB2NxKj6h2nyrlO3",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/wB2NxKj6h2nyrlO3",
+          "cachedResultName": "Utility: JSON Guardrail"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "raw_content": "={{ $json.response || $json.choices[0].message.content }}",
+            "data_type": "context_links",
+            "original_messages": "={{ $('Execute Workflow Trigger').first().json.messages }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "execute-guardrail",
+      "name": "Execute Guardrail",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "combineOperation": "any"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.validated_data && $json.validated_data.length > 0 }}",
+              "rightValue": "true",
+              "operator": {
+                "type": "boolean",
+                "operation": "equal"
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "options": {}
+      },
+      "id": "has-context-to-analyze",
+      "name": "Has Context to Analyze?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1250, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Analyze links via Crawl4AI (if available)\nconst items = $input.all();\nconst data = items[0].json;\nconst contextLinks = data.validated_data || [];\n\nconst linkSummaries = [];\n\n// Note: Crawl4AI integration требует дополнительной настройки\n// Для первой версии используем упрощенный подход\n\nfor (const link of contextLinks.slice(0, 3)) {  // Максимум 3 ссылки\n  try {\n    // Placeholder для Crawl4AI integration\n    // TODO: Implement actual Crawl4AI call when service is configured\n    \n    linkSummaries.push({\n      url: link.url || link,\n      title: link.title || \"Ссылка из обсуждения\",\n      summary: link.description || \"Анализ содержимого доступен в следующей версии (Crawl4AI integration)\"\n    });\n    \n  } catch (e) {\n    console.error(`Failed to analyze link ${link}:`, e.message);\n  }\n}\n\nreturn [\n  {\n    json: {\n      link_summaries: linkSummaries,\n      links_count: contextLinks.length,\n      analyzed_count: linkSummaries.length\n    }\n  }\n];"
+      },
+      "id": "analyze-links-crawl4ai",
+      "name": "Analyze Links (Crawl4AI)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1450, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Search external context via Searxng (if available)\nconst items = $input.all();\nconst data = items[0].json;\nconst contextLinks = data.validated_data || [];\n\nconst externalContext = [];\n\n// Note: Searxng integration требует дополнительной настройки\n// Для первой версии используем упрощенный подход\n\n// Извлекаем темы из ссылок для поиска\nconst topics = contextLinks.map(link => ({ name: link.title || link.url })).slice(0, 2);\n\nfor (const topic of topics) {  // Максимум 2 темы\n  try {\n    // Placeholder для Searxng integration\n    // TODO: Implement actual Searxng call when service is configured\n    \n    externalContext.push({\n      topic: topic.name,\n      related_articles: [\n        {\n          title: `Статья по теме: ${topic.name}`,\n          snippet: \"Поиск дополнительного контекста доступен в следующей версии (Searxng integration)\",\n          url: \"\"\n        }\n      ]\n    });\n    \n  } catch (e) {\n    console.error(`Failed to search for topic ${topic.name}:`, e.message);\n  }\n}\n\nreturn [\n  {\n    json: {\n      external_context: externalContext,\n      topics_researched: externalContext.length\n    }\n  }\n];"
+      },
+      "id": "search-context-searxng",
+      "name": "Search Context (Searxng)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1450, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Merge results from link analysis and topic search\nconst items = $input.all();\n\n// Get results from both branches\nlet linkSummaries = [];\nlet externalContext = [];\n\ntry {\n  const crawlResult = $('Analyze Links (Crawl4AI)').first();\n  linkSummaries = crawlResult?.json?.link_summaries || [];\n} catch (e) {\n  console.log('No link summaries available');\n}\n\ntry {\n  const searchResult = $('Search Context (Searxng)').first();\n  externalContext = searchResult?.json?.external_context || [];\n} catch (e) {\n  console.log('No external context available');\n}\n\nconsole.log(`📊 Context analysis complete:`);\nconsole.log(`   Link summaries: ${linkSummaries.length}`);\nconsole.log(`   External context: ${externalContext.length}`);\n\nreturn [\n  {\n    json: {\n      link_summaries: linkSummaries,\n      external_context: externalContext,\n      has_external_data: linkSummaries.length > 0 || externalContext.length > 0\n    }\n  }\n];"
+      },
+      "id": "merge-context",
+      "name": "Merge Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1650, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Return empty context if no links/topics to analyze\nreturn [\n  {\n    json: {\n      link_summaries: [],\n      external_context: [],\n      has_external_data: false\n    }\n  }\n];"
+      },
+      "id": "no-context",
+      "name": "No External Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1450, 600]
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Prepare Context Links Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Context Links Prompt": {
+      "main": [
+        [
+          {
+            "node": "Extract Links",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Links": {
+      "main": [
+        [
+          {
+            "node": "Parse Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Response": {
+      "main": [
+        [
+          {
+            "node": "Execute Guardrail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Guardrail": {
+      "main": [
+        [
+          {
+            "node": "Has Context to Analyze?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Context to Analyze?": {
+      "main": [
+        [
+          {
+            "node": "Analyze Links (Crawl4AI)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Search Context (Searxng)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No External Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze Links (Crawl4AI)": {
+      "main": [
+        [
+          {
+            "node": "Merge Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Context (Searxng)": {
+      "main": [
+        [
+          {
+            "node": "Merge Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "No External Context": {
+      "main": [
+        [
+          {
+            "node": "Merge Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "updatedAt": "2025-10-14T19:20:00.000Z",
+  "versionId": "1"
+}
+

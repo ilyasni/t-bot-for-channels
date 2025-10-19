@@ -1,0 +1,162 @@
+{
+  "name": "Group Digest Orchestrator (Sub-workflows)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "group-digest",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "webhookId": "group-digest-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Prepare data for sub-workflows\nconst items = $input.all();\nconst data = items[0].json.body || items[0].json;\n\n// Extract parameters\nconst messages = data.messages || [];\nconst userId = data.user_id;\nconst groupId = data.group_id;\nconst hours = data.hours || 24;\n\n// IMPORTANT: Save real message count\nconst messageCount = messages.length;\n\n// Limit messages for analysis\nconst maxMessages = 200;\nconst limitedMessages = messages.slice(0, maxMessages);\n\n// Format messages for agents\nconst messagesText = limitedMessages.map((msg, idx) => \n  `[${idx + 1}] ${msg.username}: ${msg.text}`\n).join('\\n\\n');\n\nreturn [\n  {\n    json: {\n      user_id: userId,\n      group_id: groupId,\n      hours: hours,\n      message_count: messageCount,\n      messages_text: messagesText\n    }\n  }\n];"
+      },
+      "id": "prepare-data",
+      "name": "Prepare Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {},
+      "id": "execute-topic-extractor",
+      "name": "Execute: Topic Extractor",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [650, 200]
+    },
+    {
+      "parameters": {},
+      "id": "execute-speaker-analyzer",
+      "name": "Execute: Speaker Analyzer",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {},
+      "id": "execute-summarizer",
+      "name": "Execute: Summarizer",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [650, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Aggregate results from all agents\nconst items = $input.all();\n\n// Get prepared data (preserves user_id, hours, message_count)\nlet preparedData = {};\ntry {\n  preparedData = $('Prepare Data').first().json;\n} catch (e) {\n  console.error('Cannot get Prepare Data:', e.message);\n  throw new Error('Execute Workflow nodes must be configured! Select agents in Execute: Topic Extractor, Execute: Speaker Analyzer, Execute: Summarizer');\n}\n\n// Get results from each agent with error handling\nlet topicsResult = {};\nlet speakersResult = {};\nlet summaryResult = {};\n\ntry {\n  const topicNode = $('Execute: Topic Extractor').first();\n  topicsResult = topicNode?.json || {};\n} catch (e) {\n  console.error('Cannot get Topic Extractor result:', e.message);\n  topicsResult = { topics: [] };\n}\n\ntry {\n  const speakerNode = $('Execute: Speaker Analyzer').first();\n  speakersResult = speakerNode?.json || {};\n} catch (e) {\n  console.error('Cannot get Speaker Analyzer result:', e.message);\n  speakersResult = { speakers: {} };\n}\n\ntry {\n  const summaryNode = $('Execute: Summarizer').first();\n  summaryResult = summaryNode?.json || {};\n} catch (e) {\n  console.error('Cannot get Summarizer result:', e.message);\n  summaryResult = { summary: \"\" };\n}\n\nconsole.log('Prepared data:', preparedData);\nconsole.log('Topics:', topicsResult.topics);\nconsole.log('Speakers:', Object.keys(speakersResult.speakers || {}));\nconsole.log('Summary length:', summaryResult.summary?.length || 0);\n\n// Aggregate all results\nconst finalResult = {\n  topics: topicsResult.topics || [],\n  speakers_summary: speakersResult.speakers || {},\n  overall_summary: summaryResult.summary || \"Обсуждались различные темы\",\n  message_count: preparedData.message_count || 0,\n  period: `${preparedData.hours || 24} hours`\n};\n\nreturn [\n  {\n    json: finalResult\n  }\n];"
+      },
+      "id": "aggregate-results",
+      "name": "Aggregate Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      },
+      "id": "respond-webhook",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1050, 300]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Prepare Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Data": {
+      "main": [
+        [
+          {
+            "node": "Execute: Topic Extractor",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Execute: Speaker Analyzer",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Execute: Summarizer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute: Topic Extractor": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute: Speaker Analyzer": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute: Summarizer": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Results": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "updatedAt": "2025-10-13T16:10:00.000Z",
+  "versionId": "1"
+}
+

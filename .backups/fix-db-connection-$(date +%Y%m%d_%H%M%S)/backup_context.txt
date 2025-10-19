@@ -1,0 +1,34 @@
+Бэкап создан: $(date '+%Y-%m-%d %H:%M:%S')
+
+КОНТЕКСТ ПРОБЛЕМЫ:
+==================
+Ошибка: "could not translate host name 'db' to address: Name or service not known"
+
+ПРИЧИНА:
+- В .env файле TELEGRAM_DATABASE_URL указывает на 'supabase-db:5432'
+- Сервис 'supabase-db' был удален из docker-compose.yml
+- Система раньше работала, но после изменений в конфигурации перестала
+
+АНАЛИЗ:
+- В рабочем бэкапе (20251015_204058) тоже был 'supabase-db'
+- SUPABASE_HOSTNAME=supabase.produman.studio (внешний Supabase)
+- Нужно заменить 'supabase-db' на 'supabase.produman.studio' в TELEGRAM_DATABASE_URL
+
+ПЛАН ИСПРАВЛЕНИЯ:
+=================
+1. Изменить TELEGRAM_DATABASE_URL с '@supabase-db:5432' на '@supabase.produman.studio:5432'
+2. Перезапустить контейнер telethon
+3. Проверить подключение
+
+ОТКАТ:
+======
+Если что-то пойдет не так:
+1. Восстановить .env из этого бэкапа
+2. Восстановить docker-compose.override.yml из этого бэкапа
+3. Перезапустить сервисы
+
+ФАЙЛЫ В БЭКАПЕ:
+===============
+- .env.backup - основной файл конфигурации
+- docker-compose.override.yml.backup - Docker конфигурация
+- backup_context.txt - этот файл с описанием

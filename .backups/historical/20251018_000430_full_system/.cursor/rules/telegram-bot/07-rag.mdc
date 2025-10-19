@@ -1,0 +1,594 @@
+---
+title: "RAG System"
+description: "Векторный поиск, AI-генерация, дайджесты, Qdrant"
+tags: ["rag", "vector-search", "ai", "qdrant", "embeddings"]
+version: "3.4"
+ruleType: "autoAttached"
+priority: medium
+scope:
+  - "telethon/rag_service/**"
+  - "telethon/voice_transcription_service.py"
+  - "telethon/*rag*.py"
+---
+
+# RAG System
+
+> **Rule Type:** Auto-Attached  
+> **Lines:** < 500 (optimized)  
+> **Priority:** Medium
+
+## 🎯 High-Level Overview
+
+**RAG Service** — микросервис для векторного поиска и AI-генерации ответов.
+
+**Essential Stack:**
+- Qdrant (векторная БД)
+- GigaChat (embeddings: EmbeddingsGigaR, 1536 dim)
+- Redis (cache embeddings, 24h TTL)
+- OpenRouter (LLM generation)
+
+**Pipeline:**
+```
+Post → Embedding (GigaChat) → Qdrant Vector → Indexed
+     ↓ (cache)
+   Redis (24h TTL)
+
+User Query → Embedding → Qdrant Search → Top K Results
+                                              ↓
+                                    Context + Query → LLM → Answer
+```
+
+## 🚀 Critical Patterns
+
+### 1. User Isolation in Qdrant
+
+```python
+# ✅ Correct - separate collection per user
+collection_name = f"user_{user_id}_posts"
+
+# ❌ Bad - shared collection
+collection_name = "posts"  # NO! Data leak!
+```
+
+### 2. Embedding Cache
+
+```python
+# ✅ Correct - cache in Redis
+import hashlib
+
+text_hash = hashlib.md5(text.encode()).hexdigest()
+cache_key = f"embedding:{text_hash}"
+
+cached = redis_client.get(cache_key)
+if cached:
+    return json.loads(cached)
+
+# Generate & cache
+embedding = await generate_gigachat_embedding(text)
+redis_client.setex(cache_key, 86400, json.dumps(embedding))  # 24h
+
+# ❌ Bad - no cache
+embedding = await generate_gigachat_embedding(text)  # Slow & expensive!
+```
+
+### 3. Score Threshold
+
+```python
+# ✅ Correct - filter low-relevance results
+results = qdrant_client.search(
+    collection_name=f"user_{user_id}_posts",
+    query_vector=query_embedding,
+    limit=10,
+    score_threshold=0.7  # Only relevant results
+)
+
+# ❌ Bad - returns irrelevant
+results = qdrant_client.search(
+    collection_name=collection_name,
+    query_vector=query_embedding,
+    limit=10
+    # No threshold!
+)
+```
+
+## 📦 Core Components
+
+### VectorDB Service
+
+```python
+from qdrant_client import QdrantClient
+from qdrant_client.models import Distance, VectorParams, Filter, FieldCondition
+
+class VectorDB:
+    def __init__(self):
+        self.client = QdrantClient(
+            url=os.getenv("QDRANT_URL", "http://qdrant:6333"),
+            api_key=os.getenv("QDRANT_API_KEY"),
+            timeout=30
+        )
+    
+    async def create_collection(self, user_id: int):
+        """Create user-specific collection"""
+        collection_name = f"user_{user_id}_posts"
+        
+        if self._collection_exists(collection_name):
+            return
+        
+        self.client.create_collection(
+            collection_name=collection_name,
+            vectors_config=VectorParams(
+                size=1536,  # GigaChat embeddings
+                distance=Distance.COSINE
+            )
+        )
+    
+    async def upsert_post(
+        self,
+        user_id: int,
+        post_id: int,
+        embedding: List[float],
+        metadata: dict
+    ):
+        """Upsert post with metadata"""
+        self.client.upsert(
+            collection_name=f"user_{user_id}_posts",
+            points=[{
+                "id": post_id,
+                "vector": embedding,
+                "payload": {
+                    "post_id": post_id,
+                    "channel_id": metadata["channel_id"],
+                    "channel_username": metadata["channel_username"],
+                    "tags": metadata.get("tags", []),
+                    "posted_at": metadata["posted_at"],
+                    "url": metadata["url"],
+                    "text": metadata["text"][:500]
+                }
+            }]
+        )
+    
+    async def search(
+        self,
+        user_id: int,
+        query_vector: List[float],
+        filters: Optional[dict] = None,
+        top_k: int = 10,
+        score_threshold: float = 0.7
+    ) -> List[dict]:
+        """Vector search with filters"""
+        # Build filters
+        query_filter = None
+        if filters:
+            conditions = []
+            if "channel_id" in filters:
+                conditions.append(
+                    FieldCondition(
+                        key="channel_id",
+                        match={"value": filters["channel_id"]}
+                    )
+                )
+            if "tags" in filters:
+                conditions.append(
+                    FieldCondition(
+                        key="tags",
+                        match={"any": filters["tags"]}
+                    )
+                )
+            if conditions:
+                query_filter = Filter(must=conditions)
+        
+        # Search
+        results = self.client.search(
+            collection_name=f"user_{user_id}_posts",
+            query_vector=query_vector,
+            query_filter=query_filter,
+            limit=top_k,
+            score_threshold=score_threshold
+        )
+        
+        return [{"post_id": r.id, "score": r.score, **r.payload} for r in results]
+```
+
+### Embeddings Service
+
+```python
+import httpx
+import hashlib
+import json
+
+class EmbeddingsService:
+    def __init__(self):
+        self.gigachat_url = os.getenv(
+            "GIGACHAT_PROXY_URL",
+            "http://gpt2giga-proxy:8090"
+        )
+        self.redis_client = redis.Redis(
+            host=os.getenv("REDIS_HOST", "redis"),
+            port=6379,
+            decode_responses=True
+        )
+        self.cache_ttl = 86400  # 24 hours
+    
+    async def generate(self, text: str) -> List[float]:
+        """Generate embedding with cache"""
+        # Cache key
+        text_hash = hashlib.md5(text.encode()).hexdigest()
+        cache_key = f"embedding:{text_hash}"
+        
+        # Check cache
+        cached = self.redis_client.get(cache_key)
+        if cached:
+            return json.loads(cached)
+        
+        # Generate via GigaChat
+        embedding = await self._generate_gigachat(text)
+        
+        # Save to cache
+        self.redis_client.setex(
+            cache_key,
+            self.cache_ttl,
+            json.dumps(embedding)
+        )
+        
+        return embedding
+    
+    async def _generate_gigachat(self, text: str) -> List[float]:
+        """GigaChat embeddings (EmbeddingsGigaR)"""
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f"{self.gigachat_url}/v1/embeddings",
+                json={
+                    "model": "EmbeddingsGigaR",
+                    "input": text
+                }
+            )
+            response.raise_for_status()
+            return response.json()["data"][0]["embedding"]
+```
+
+### RAG Generator
+
+```python
+class RAGGenerator:
+    def __init__(self):
+        self.openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
+        self.model = os.getenv("OPENROUTER_MODEL", "google/gemini-2.0-flash-exp:free")
+    
+    async def generate_answer(
+        self,
+        query: str,
+        context_posts: List[dict],
+        max_tokens: int = 500,
+        temperature: float = 0.3
+    ) -> Dict[str, Any]:
+        """RAG answer generation"""
+        # Format context
+        context_text = "\n---\n".join([
+            f"[Источник {i}: @{p['channel_username']}, score: {p['score']:.2f}]\n{p['text']}"
+            for i, p in enumerate(context_posts, 1)
+        ])
+        
+        # Prompt
+        prompt = f"""На основе следующего контекста ответь на вопрос пользователя.
+
+Контекст из Telegram каналов:
+{context_text}
+
+Вопрос: {query}
+
+Инструкции:
+- Отвечай на русском языке
+- Используй только информацию из контекста
+- Если в контексте нет ответа, скажи об этом
+- Укажи источники (каналы) из которых взята информация
+
+Ответ:"""
+        
+        # Generate
+        answer = await self._generate_openrouter(prompt, max_tokens, temperature)
+        
+        return {
+            "answer": answer,
+            "sources": [
+                {
+                    "post_id": p["post_id"],
+                    "channel": p["channel_username"],
+                    "url": p["url"],
+                    "score": p["score"]
+                }
+                for p in context_posts
+            ],
+            "context_size": len(context_posts)
+        }
+    
+    async def _generate_openrouter(
+        self,
+        prompt: str,
+        max_tokens: int,
+        temperature: float
+    ) -> str:
+        """OpenRouter API call"""
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {self.openrouter_api_key}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": self.model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": max_tokens,
+                    "temperature": temperature
+                }
+            )
+            response.raise_for_status()
+            return response.json()["choices"][0]["message"]["content"]
+```
+
+### Indexer Service
+
+```python
+class IndexerService:
+    def __init__(self):
+        self.vector_db = VectorDB()
+        self.embeddings_service = EmbeddingsService()
+    
+    async def index_post(self, post_id: int, user_id: int) -> bool:
+        """Index single post"""
+        # Get post
+        db = SessionLocal()
+        post = db.query(Post).filter(Post.id == post_id).first()
+        
+        if not post:
+            db.close()
+            return False
+        
+        # Generate embedding
+        text = post.text
+        if post.enriched_content:
+            text = f"{post.text}\n\n{post.enriched_content}"
+        
+        embedding = await self.embeddings_service.generate(text)
+        
+        # Metadata
+        metadata = {
+            "channel_id": post.channel_id,
+            "channel_username": post.channel.channel_username,
+            "tags": post.tags or [],
+            "posted_at": post.posted_at.isoformat(),
+            "url": post.url,
+            "text": text
+        }
+        
+        # Upsert to Qdrant
+        await self.vector_db.upsert_post(
+            user_id=user_id,
+            post_id=post.id,
+            embedding=embedding,
+            metadata=metadata
+        )
+        
+        # Save status
+        db.add(IndexingStatus(
+            user_id=user_id,
+            post_id=post.id,
+            vector_id=f"user_{user_id}_posts:{post.id}",
+            status="success"
+        ))
+        db.commit()
+        db.close()
+        
+        return True
+    
+    async def batch_index(self, user_id: int, post_ids: List[int]) -> Dict[str, int]:
+        """Batch indexing (max 100 posts)"""
+        success = 0
+        failed = 0
+        
+        for batch in chunks(post_ids, 100):
+            tasks = [self.index_post(post_id, user_id) for post_id in batch]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            for result in results:
+                if isinstance(result, Exception):
+                    failed += 1
+                elif result:
+                    success += 1
+                else:
+                    failed += 1
+        
+        return {"success": success, "failed": failed}
+```
+
+## 🎤 Voice Transcription
+
+### SaluteSpeech Integration
+
+```python
+# ✅ Correct - Voice transcription service
+from voice_transcription_service import SaluteSpeechClient
+
+# Инициализация клиента
+client = SaluteSpeechClient()
+
+# Транскрибация голосового сообщения
+async def transcribe_voice_message(voice_file_path: str) -> str:
+    """Транскрибирует голосовое сообщение в текст"""
+    try:
+        # Загрузка и конвертация в base64
+        with open(voice_file_path, "rb") as f:
+            audio_data = base64.b64encode(f.read()).decode()
+        
+        # Транскрибация через SaluteSpeech
+        result = await client.transcribe(audio_data)
+        return result.get("result", "")
+        
+    except Exception as e:
+        logger.error(f"Ошибка транскрибации: {e}")
+        return "Не удалось распознать голосовое сообщение"
+```
+
+### Voice Command Classification
+
+```python
+# ✅ Correct - Voice command processing
+async def process_voice_message(user_id: int, voice_file_path: str):
+    """Обрабатывает голосовое сообщение"""
+    
+    # 1. Транскрибация
+    text = await transcribe_voice_message(voice_file_path)
+    
+    # 2. Классификация команды (через n8n webhook)
+    command_type = await classify_voice_command(text)
+    
+    # 3. Выполнение команды
+    if command_type == "digest":
+        await generate_digest(user_id)
+    elif command_type == "search":
+        await search_posts(user_id, text)
+    elif command_type == "settings":
+        await show_settings(user_id)
+```
+
+## 🌐 RAG API Endpoints
+
+```python
+# rag_service/main.py
+from fastapi import FastAPI, HTTPException, BackgroundTasks
+
+app = FastAPI(title="RAG Service")
+
+@app.post("/rag/query")
+async def rag_query(
+    user_id: int,
+    query: str,
+    top_k: int = 10,
+    min_score: float = 0.7
+):
+    """RAG query endpoint"""
+    # Embedding
+    query_embedding = await embeddings_service.generate(query)
+    
+    # Search
+    results = await vector_db.search(
+        user_id=user_id,
+        query_vector=query_embedding,
+        top_k=top_k,
+        score_threshold=min_score
+    )
+    
+    if not results:
+        return {
+            "answer": "К сожалению, не нашел релевантной информации в ваших каналах.",
+            "sources": []
+        }
+    
+    # Generate answer
+    response = await rag_generator.generate_answer(query=query, context_posts=results)
+    return response
+
+@app.post("/rag/index/post/{post_id}")
+async def index_post_endpoint(
+    post_id: int,
+    user_id: int,
+    background_tasks: BackgroundTasks
+):
+    """Index post (background)"""
+    background_tasks.add_task(indexer_service.index_post, post_id, user_id)
+    return {"status": "queued", "post_id": post_id}
+
+@app.post("/rag/index/batch")
+async def batch_index_endpoint(
+    user_id: int,
+    post_ids: List[int],
+    background_tasks: BackgroundTasks
+):
+    """Batch indexing"""
+    background_tasks.add_task(indexer_service.batch_index, user_id, post_ids)
+    return {"status": "queued", "count": len(post_ids)}
+```
+
+## ✅ Verification Checklist
+
+- [ ] Qdrant collections isolated by user (`user_{id}_posts`)
+- [ ] Embeddings cached in Redis (24h TTL)
+- [ ] Score threshold >= 0.7 for relevance
+- [ ] Batch operations limited to 100 items
+- [ ] Indexing status saved to PostgreSQL
+- [ ] Background tasks for indexing
+- [ ] Error handling with try-except
+- [ ] Timeouts set (30s for embeddings, 60s for LLM)
+
+## ❌ Deprecated Patterns
+
+**NEVER do this:**
+
+```python
+# ❌ Shared collection
+collection_name = "posts"  # NO! Data leak!
+
+# ❌ No cache
+embedding = await generate_embedding(text)  # Expensive!
+
+# ❌ No score threshold
+results = qdrant_client.search(query_vector=qv, limit=10)  # Irrelevant results!
+
+# ❌ Blocking
+time.sleep(5)  # Blocks event loop!
+
+# ❌ No batch limit
+for post_id in all_post_ids:  # Could be 10,000!
+    await index_post(post_id)
+```
+
+## 🎯 Quick Examples
+
+### ✅ Correct
+
+```python
+# User isolation
+collection = f"user_{user_id}_posts"
+
+# Cache embeddings
+cache_key = f"embedding:{hash}"
+cached = redis_client.get(cache_key)
+if cached:
+    return json.loads(cached)
+
+# Score threshold
+results = qdrant_client.search(score_threshold=0.7)
+
+# Background indexing
+background_tasks.add_task(index_post, post_id)
+
+# Batch with limit
+for batch in chunks(post_ids, 100):
+    await process_batch(batch)
+```
+
+### ❌ Bad
+
+```python
+# Shared collection
+collection = "posts"
+
+# No cache
+embedding = await generate(text)
+
+# No threshold
+results = qdrant_client.search()
+
+# Blocking
+await index_post(post_id)  # Blocks!
+
+# No limit
+for post_id in all_posts:  # Could be 10,000!
+    process(post_id)
+```
+
+## 📚 Related Rules
+
+- `01-core.mdc` — User filtering, async patterns
+- `03-database.mdc` — IndexingStatus model, Redis cache
+- `09-external.mdc` — Qdrant, GigaChat integration

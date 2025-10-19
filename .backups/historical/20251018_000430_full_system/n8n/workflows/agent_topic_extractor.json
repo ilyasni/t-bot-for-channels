@@ -1,0 +1,138 @@
+{
+  "name": "Agent: Topic Extractor",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "execute-workflow-trigger",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Prepare HTTP Request data for topic extraction\nconst items = $input.all();\nconst data = items[0].json;\n\nconst messagesText = data.messages_text || \"\";\nconst hours = data.hours || 24;\nconst assessment = data.assessment || {};\nconst detailLevel = assessment.detail_level || \"standard\";\nconst dialogueType = assessment.dialogue_type || \"casual_chat\";\nconst messageCount = assessment.message_count || 0;\n\n// Calculate max_tokens safely (no optional chaining in n8n)\nconst maxTokens = (assessment.token_budgets && assessment.token_budgets.topics) ? assessment.token_budgets.topics : 500;\n\n// Adaptive topic count\nconst topicCounts = {\n  micro: 1,\n  minimal: \"2-3\",\n  standard: \"3-5\",\n  detailed: \"5-8\",\n  comprehensive: \"8-12\"\n};\nconst targetTopicCount = topicCounts[detailLevel] || \"3-5\";\n\n// Build system message\nconst systemMessage = \"Ты - эксперт по извлечению тем из диалогов. Анализируй сообщения и находи ключевые темы обсуждения с приоритетами. Возвращай ТОЛЬКО валидный JSON: {\\\"topics\\\": [{\\\"name\\\": \\\"...\\\", \\\"priority\\\": \\\"high|medium|low\\\", \\\"subtopics\\\": [...]}]}\";\n\n// Build user message\nconst userMessage = `Извлеки темы из диалога в Telegram группе.\\n\\nASSESSMENT КОНТЕКСТ:\\n- Тип диалога: ${dialogueType}\\n- Уровень детализации: ${detailLevel}\\n- Сообщений: ${messageCount}\\n- Период: ${hours} часов\\n\\nСООБЩЕНИЯ:\\n${messagesText}\\n\\n=== ЗАДАЧА ===\\n\\nИзвлеки ${targetTopicCount} основных тем обсуждения.\\n\\n${detailLevel === 'micro' ? 'Верни ТОЛЬКО самую главную тему.' : ''}\\n\\nДля каждой темы укажи:\\n- name: название темы (краткое)\\n- priority: high | medium | low (важность в контексте диалога)\\n${detailLevel !== 'micro' && detailLevel !== 'minimal' ? '- message_count: примерное количество упоминаний\\n- subtopics: список подтем (если есть)' : ''}\\n\\nФОРМАТ:\\n{\\n  \"topics\": [\\n    {\\n      \"name\": \"Проблема с вебвью\",\\n      \"priority\": \"high\"${detailLevel !== 'micro' && detailLevel !== 'minimal' ? ',\\n      \"message_count\": 15,\\n      \"subtopics\": [\"безопасность\", \"производительность\"]' : ''}\\n    }\\n  ]\\n}\\n\\nВАЖНО: Верни ТОЛЬКО валидный JSON без markdown блоков!`;\n\nreturn [\n  {\n    json: {\n      system_message: systemMessage,\n      user_message: userMessage,\n      max_tokens: maxTokens,\n      hours: hours,\n      detail_level: detailLevel\n    }\n  }\n];"
+      },
+      "id": "prepare-prompt",
+      "name": "Prepare Topic Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://gpt2giga-proxy:8090/v1/chat/completions",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\"model\": \"GigaChat\", \"messages\": [{\"role\": \"system\", \"content\": $json.system_message}, {\"role\": \"user\", \"content\": $json.user_message}], \"temperature\": 0.1, \"max_tokens\": $json.max_tokens, \"response_format\": {\"type\": \"json_object\"}} }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "gigachat-call",
+      "name": "GigaChat: Extract Topics",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse GigaChat response from gpt2giga proxy\nconst response = $input.first().json.choices?.[0]?.message?.content || '{}';\n\nconsole.log('📥 GigaChat response received:', response.substring(0, 100));\n\nreturn [\n  {\n    json: {\n      raw_content: response\n    }\n  }\n];"
+      },
+      "id": "parse-response",
+      "name": "Parse Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "workflowId": "utility_json_guardrail",
+        "source": "database",
+        "inputData": {
+          "values": [
+            {
+              "json": {
+                "raw_content": "={{ $json.raw_content }}",
+                "data_type": "topics",
+                "original_messages": "={{ $execution.customData.getAll().original_messages }}"
+              }
+            }
+          ]
+        }
+      },
+      "id": "execute-guardrail",
+      "name": "Execute Guardrail",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [1050, 300]
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Prepare Topic Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Topic Prompt": {
+      "main": [
+        [
+          {
+            "node": "GigaChat: Extract Topics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GigaChat: Extract Topics": {
+      "main": [
+        [
+          {
+            "node": "Parse Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Response": {
+      "main": [
+        [
+          {
+            "node": "Execute Guardrail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "updatedAt": "2025-10-13T16:10:00.000Z",
+  "versionId": "1"
+}
+

@@ -1,0 +1,147 @@
+{
+  "name": "Agent: Timeline Builder",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "execute-workflow-trigger",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        250,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Prepare HTTP Request data for timeline building\nconst items = $input.all();\nconst data = items[0].json;\n\n// Get original messages from execution context\nconst executionData = $execution.customData.getAll();\nconst originalMessages = executionData.original_messages || data.messages || [];\n\nconst assessment = data.assessment || {};\nconst topics = data.topics || [];\nconst keyMoments = data.key_moments || [];\nconst emotions = data.emotions || {};\nconst messages = originalMessages;\n\n// Format messages with timestamps\nconst messagesWithTime = messages.map((m, i) => {\n  // Extract time from date string or use index\n  let timeStr = \"\";\n  if (m.date) {\n    const date = new Date(m.date);\n    timeStr = `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;\n  } else {\n    timeStr = `msg${i+1}`;\n  }\n  return `[${timeStr}] ${m.username}: ${m.text}`;\n}).join('\\n');\n\n// Build system message\nconst systemMessage = \"Ты - аналитик хронологии диалогов. Строишь временные линии обсуждений с учетом эмоциональной динамики. Возвращай ТОЛЬКО валидный JSON: {\\\"timeline\\\": [...], \\\"emotional_progression\\\": \\\"...\\\"}. ЗАПРЕЩЕНО: markdown, комментарии, придумывание данных.\";\n\n// === BUILD USER MESSAGE ===\n\nconst userMessage = `Построй хронологическую линию дискуссии с эмоциональной динамикой.\\n\\nТИП ДИАЛОГА: ${assessment.dialogue_type}\\n\\n=== КОНТЕКСТ ===\\n\\nТЕМЫ:\\n${topics.map(t => `- ${t.name}`).join('\\n')}\\n\\nКЛЮЧЕВЫЕ МОМЕНТЫ:\\n${keyMoments.map(km => `${km.type}: ${km.content}`).join('\\n')}\\n\\nЭМОЦИОНАЛЬНЫЙ ФОН:\\n- Общий тон: ${emotions.overall_tone || 'neutral'}\\n- Динамика: ${emotions.emotional_arc || 'стабильная'}\\n\\nСООБЩЕНИЯ С ВРЕМЕНЕМ:\\n${messagesWithTime}\\n\\n=== ЗАДАЧА ===\\n\\nСоздай хронологическую линию показывающую:\\n1. Как начался разговор (первые темы)\\n2. Как развивались темы и дискуссия\\n3. Когда были ключевые моменты (решения, проблемы)\\n4. Эмоциональные пики (когда атмосфера менялась)\\n5. Как завершился диалог\\n\\nДля каждого события укажи:\\n- time: время (HH:MM или относительное)\\n- event: что произошло (краткое описание)\\n- participants: кто участвовал\\n- emotion: эмоциональный окрас (calm/concern/tension/enthusiasm/relief)\\n- outcome: результат или переход к следующему этапу\\n\\nФОРМАТ:\\n{\\n  \"timeline\": [\\n    {\\n      \"time\": \"12:30\",\\n      \"event\": \"Начало обсуждения витрины\",\\n      \"participants\": [\"@Оксана\"],\\n      \"emotion\": \"calm\",\\n      \"outcome\": \"Переход к вопросам функционала\"\\n    },\\n    {\\n      \"time\": \"12:45\",\\n      \"event\": \"Выявление проблемы с вебвью\",\\n      \"participants\": [\"@Оксана\"],\\n      \"emotion\": \"concern\",\\n      \"outcome\": \"Начало анализа рисков\"\\n    }\\n  ],\\n  \"emotional_progression\": \"Спокойное начало (0.3) → Пик напряжения (0.7) → Конструктивное завершение (0.5)\"\\n}\\n\\nВАЖНО:\\n- Верни ТОЛЬКО валидный JSON\\n- 5-10 событий максимум (только важные)\\n- Фокус на переломные моменты и эмоциональные сдвиги`;\n\n// Calculate max_tokens safely\nconst maxTokens = (assessment.token_budgets && assessment.token_budgets.timeline) ? assessment.token_budgets.timeline : 800;\n\nreturn [\n  {\n    json: {\n      system_message: systemMessage,\n      user_message: userMessage,\n      max_tokens: maxTokens,\n      message_count: messages.length\n    }\n  }\n];"
+      },
+      "id": "prepare-timeline-prompt",
+      "name": "Prepare Timeline Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        450,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "http://gpt2giga-proxy:8000/v1/chat/completions",
+        "authentication": "none",
+        "requestMethod": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyContentType": "json",
+        "jsonBody": "={{ {\"model\": \"GigaChat-Pro\", \"messages\": [{\"role\": \"system\", \"content\": $json.system_message}, {\"role\": \"user\", \"content\": $json.user_message}], \"temperature\": 0.1, \"max_tokens\": $json.max_tokens, \"response_format\": {\"type\": \"json_object\"}} }}",
+        "options": {}
+      },
+      "id": "gigachat-timeline",
+      "name": "GigaChat: Build Timeline",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        650,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse GigaChat response from gpt2giga proxy\nconst response = $input.first().json.choices?.[0]?.message?.content || '{}';\n\nconsole.log('📥 GigaChat response received:', response.substring(0, 100));\n\nreturn [\n  {\n    json: {\n      raw_content: response\n    }\n  }\n];"
+      },
+      "id": "parse-timeline-response",
+      "name": "Parse Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "workflowId": "utility_json_guardrail",
+        "source": "database",
+        "inputData": {
+          "values": [
+            {
+              "json": {
+                "raw_content": "={{ $json.response || choices[0].message.content }}",
+                "data_type": "timeline",
+                "original_messages": "={{ $execution.customData.getAll().original_messages }}"
+              }
+            }
+          ]
+        }
+      },
+      "id": "execute-guardrail",
+      "name": "Execute Guardrail",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [
+        850,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Prepare Timeline Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Timeline Prompt": {
+      "main": [
+        [
+          {
+            "node": "GigaChat: Build Timeline",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GigaChat: Build Timeline": {
+      "main": [
+        [
+          {
+            "node": "Parse Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Response": {
+      "main": [
+        [
+          {
+            "node": "Execute Guardrail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "updatedAt": "2025-10-14T19:15:00.000Z",
+  "versionId": "1"
+}
